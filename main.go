@@ -22,15 +22,13 @@ import (
 //go:embed static templates
 var content embed.FS
 
-var (
-	upgrader = websocket.Upgrader{
-		ReadBufferSize:  1024,
-		WriteBufferSize: 1024,
-		CheckOrigin: func(r *http.Request) bool {
-			return true // In production, you might want to restrict this
-		},
-	}
-)
+var upgrader = websocket.Upgrader{
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
+	CheckOrigin: func(r *http.Request) bool {
+		return true // In production, you might want to restrict this
+	},
+}
 
 type FileInfo struct {
 	Name    string `json:"name"`
@@ -205,33 +203,52 @@ func handleUpload(baseDir string) http.HandlerFunc {
 		}
 
 		if err := r.ParseMultipartForm(32 << 20); err != nil {
+			log.Printf("Error parsing multipart form: %v", err)
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 
 		files := r.MultipartForm.File["files"]
+		log.Printf("Received upload request for %d files to directory: %s", len(files), targetDir)
+
+		uploadedFiles := make([]string, 0, len(files))
 		for _, fileHeader := range files {
+			log.Printf("Processing file: %s (size: %d bytes)", fileHeader.Filename, fileHeader.Size)
+
 			file, err := fileHeader.Open()
 			if err != nil {
+				log.Printf("Error opening uploaded file %s: %v", fileHeader.Filename, err)
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
 			defer file.Close()
 
-			dst, err := os.Create(filepath.Join(targetDir, fileHeader.Filename))
+			targetPath := filepath.Join(targetDir, fileHeader.Filename)
+			dst, err := os.Create(targetPath)
 			if err != nil {
+				log.Printf("Error creating destination file %s: %v", targetPath, err)
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
 			defer dst.Close()
 
-			if _, err := io.Copy(dst, file); err != nil {
+			written, err := io.Copy(dst, file)
+			if err != nil {
+				log.Printf("Error writing file %s: %v", targetPath, err)
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
+
+			log.Printf("Successfully uploaded file %s (%d bytes written)", fileHeader.Filename, written)
+			uploadedFiles = append(uploadedFiles, fileHeader.Filename)
 		}
 
-		w.WriteHeader(http.StatusOK)
+		// Return success response with uploaded files list
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"message": fmt.Sprintf("Successfully uploaded %d files", len(uploadedFiles)),
+			"files":   uploadedFiles,
+		})
 	}
 }
 
@@ -296,7 +313,6 @@ func handleDownload(baseDir string) http.HandlerFunc {
 				_, err = io.Copy(f, src)
 				return err
 			})
-
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return

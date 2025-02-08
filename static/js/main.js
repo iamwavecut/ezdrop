@@ -618,6 +618,9 @@ class FileBrowser {
 
     async handleFileDrop(files, targetPath) {
         const formData = new FormData();
+        const totalSize = Array.from(files).reduce((acc, file) => acc + file.size, 0);
+        let uploadedSize = 0;
+
         Array.from(files).forEach(file => {
             formData.append('files', file);
         });
@@ -628,20 +631,43 @@ class FileBrowser {
         const progressText = progress.querySelector('.progress-text');
 
         try {
+            progressText.textContent = `Uploading ${files.length} file(s)...`;
             const response = await fetch(`/api/upload?dir=${encodeURIComponent(targetPath)}`, {
                 method: 'POST',
                 body: formData
             });
 
-            if (!response.ok) throw new Error('Upload failed');
+            if (!response.ok) {
+                throw new Error(`Upload failed: ${response.statusText}`);
+            }
             
+            const result = await response.json();
+            progressText.textContent = `Successfully uploaded ${result.files.length} file(s)`;
+            progressBar.style.width = '100%';
+            
+            // Show success message
+            const message = document.createElement('div');
+            message.className = 'upload-message success';
+            message.textContent = result.message;
+            document.body.appendChild(message);
+            setTimeout(() => message.remove(), 3000);
+
             await this.loadCurrentDirectory();
         } catch (error) {
             console.error('Upload error:', error);
+            // Show error message
+            const message = document.createElement('div');
+            message.className = 'upload-message error';
+            message.textContent = error.message;
+            document.body.appendChild(message);
+            setTimeout(() => message.remove(), 3000);
         } finally {
-            progress.classList.add('hidden');
-            progressBar.style.width = '0';
-            progressText.textContent = '';
+            // Hide progress after a short delay
+            setTimeout(() => {
+                progress.classList.add('hidden');
+                progressBar.style.width = '0';
+                progressText.textContent = '';
+            }, 1000);
         }
     }
 
