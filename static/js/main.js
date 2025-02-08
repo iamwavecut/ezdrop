@@ -167,18 +167,16 @@ class FileBrowser {
         });
 
         // File upload handling
-        document.getElementById('file-upload').addEventListener('change', (e) => {
-            if (e.target.files.length) {
-                this.handleFileDrop(e.target.files, this.currentPath);
-            }
-        });
+        const fileUpload = document.getElementById('file-upload');
+        if (fileUpload) {
+            fileUpload.addEventListener('change', (e) => this.handleFileDrop(e.target.files, this.currentPath));
+        }
 
         // Directory upload handling
-        document.getElementById('dir-upload').addEventListener('change', (e) => {
-            if (e.target.files.length) {
-                this.handleFileDrop(e.target.files, this.currentPath);
-            }
-        });
+        const dirUpload = document.getElementById('dir-upload');
+        if (dirUpload) {
+            dirUpload.addEventListener('change', (e) => this.handleFileDrop(e.target.files, this.currentPath));
+        }
 
         // Set initial view mode button state
         document.querySelectorAll('.view-toggle button').forEach(btn => {
@@ -678,7 +676,12 @@ class FileBrowser {
     }
 
     async calculateCRC32(blob) {
-        const worker = this.workerPool.find(w => !w.busy);
+        if (!this.workerPool || !Array.isArray(this.workerPool)) {
+            console.error('Worker pool not initialized properly');
+            throw new Error('Worker pool initialization failed');
+        }
+
+        const worker = this.workerPool.find(w => w && !w.busy);
         if (!worker) {
             // If all workers are busy, wait for the next available one
             await new Promise(resolve => setTimeout(resolve, 10));
@@ -688,13 +691,24 @@ class FileBrowser {
         worker.busy = true;
         const id = this.nextWorkerId++;
         
-        return new Promise(resolve => {
-            this.workerPromises.set(id, resolve);
-            worker.postMessage({ id, chunk: blob });
+        return new Promise((resolve, reject) => {
+            try {
+                this.workerPromises.set(id, resolve);
+                worker.postMessage({ id, chunk: blob });
+            } catch (error) {
+                worker.busy = false;
+                this.workerPromises.delete(id);
+                reject(error);
+            }
         });
     }
 
     async handleFileDrop(files, targetPath) {
+        if (!files || files.length === 0) {
+            console.warn('No files to upload');
+            return;
+        }
+
         const CHUNK_SIZE = 1024 * 1024; // 1MB chunks
         const MAX_RETRIES = 3;
         const MAX_PARALLEL_UPLOADS = 3;
@@ -719,7 +733,14 @@ class FileBrowser {
         try {
             for (const file of files) {
                 progressText.textContent = `Calculating checksum for ${file.name}...`;
-                const fileChecksum = await this.calculateCRC32(file);
+                let fileChecksum;
+                try {
+                    fileChecksum = await this.calculateCRC32(file);
+                } catch (error) {
+                    console.error('Error calculating file checksum:', error);
+                    showMessage(`Error processing ${file.name}: ${error.message}`, 'error');
+                    continue;
+                }
                 
                 const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
                 const chunks = [];
