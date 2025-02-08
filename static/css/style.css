@@ -1,27 +1,35 @@
 :root {
     /* Light theme */
     --primary-color: #2196f3;
-    --hover-color: #e3f2fd;
-    --selected-color: #bbdefb;
+    --primary-hover: #1976d2;
+    --hover-color: rgba(33, 150, 243, 0.1);
+    --selected-color: rgba(33, 150, 243, 0.2);
     --border-color: #e0e0e0;
     --text-color: #333;
     --text-secondary: #666;
     --bg-color: #ffffff;
     --bg-secondary: #f5f5f5;
     --header-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    --transition-speed: 0.2s;
 }
 
 :root[data-theme="dark"] {
     /* Dark theme */
     --primary-color: #64b5f6;
-    --hover-color: #1e3a5f;
-    --selected-color: #1e88e5;
+    --primary-hover: #42a5f5;
+    --hover-color: rgba(100, 181, 246, 0.1);
+    --selected-color: rgba(100, 181, 246, 0.2);
     --border-color: #424242;
     --text-color: #e0e0e0;
     --text-secondary: #9e9e9e;
     --bg-color: #1e1e1e;
     --bg-secondary: #2d2d2d;
     --header-shadow: 0 2px 4px rgba(0,0,0,0.3);
+}
+
+* {
+    box-sizing: border-box;
+    transition: background-color var(--transition-speed), color var(--transition-speed);
 }
 
 body {
@@ -50,9 +58,9 @@ body {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    gap: 1rem;
-    flex-wrap: nowrap;
-    min-height: 48px;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
 }
 
 .view-toggle {
@@ -60,28 +68,45 @@ body {
     gap: 0.5rem;
 }
 
-.view-toggle button {
-    padding: 4px 8px;
-    background: transparent;
+.view-toggle button,
+.sort-control,
+.upload-controls label,
+#download-btn {
+    padding: 8px 16px;
     border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-color);
     cursor: pointer;
+    font-size: 14px;
+    transition: all var(--transition-speed);
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.view-toggle button:hover,
+.sort-control:hover,
+.upload-controls label:hover,
+#download-btn:hover {
+    background: var(--hover-color);
 }
 
 .view-toggle button.active {
     background: var(--primary-color);
     color: white;
+    border-color: var(--primary-color);
 }
 
 #path-bar {
-    display: flex;
-    align-items: center;
-    padding: 8px 12px;
     background: var(--bg-secondary);
+    padding: 12px 16px;
     border-radius: 4px;
-    margin-bottom: 1rem;
-    overflow-x: auto;
     font-family: monospace;
+    font-size: 14px;
     white-space: nowrap;
+    overflow-x: auto;
+    margin-bottom: 16px;
 }
 
 .current-path {
@@ -125,27 +150,15 @@ body {
 /* Replace Grid View with Multi-Column View */
 .grid-view {
     display: grid;
-    grid-auto-flow: column;
-    grid-template-rows: repeat(auto-fill, minmax(32px, auto));
-    gap: 8px;
-    padding: 1rem;
-    overflow-x: auto;
-    overflow-y: hidden;
-    height: 100%;
-    align-content: start;
-    min-width: max-content;
-    background: var(--bg-secondary);
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 16px;
+    padding: 16px;
 }
 
 .grid-view .file-item {
-    display: grid;
-    grid-template-columns: auto minmax(200px, 1fr) auto auto;
-    gap: 1rem;
-    padding: 8px 16px;
-    background: white;
-    border-radius: 4px;
-    min-width: 400px;
-    white-space: nowrap;
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    padding: 16px;
 }
 
 /* Remove old grid-specific styles */
@@ -164,6 +177,13 @@ body {
     background: var(--bg-color);
     border-color: var(--border-color);
     z-index: 1;
+    display: grid;
+    grid-template-columns: auto 1fr auto auto;
+    gap: 16px;
+    padding: 12px 16px;
+    border-radius: 4px;
+    cursor: default;
+    transition: all var(--transition-speed);
 }
 
 .file-item:hover {
@@ -172,14 +192,13 @@ body {
 
 .file-item.selected {
     background: var(--selected-color);
-    color: var(--bg-color);
 }
 
 .file-item.cursor {
     outline: 2px solid var(--primary-color);
     outline-offset: -2px;
-    z-index: 2;
     position: relative;
+    z-index: 2;
 }
 
 .file-item .icon {
@@ -200,40 +219,65 @@ body {
 }
 
 /* Upload progress */
-#upload-progress {
+.upload-progress {
     position: fixed;
-    bottom: 20px;
-    right: 20px;
-    width: 300px;
-    background: white;
-    border-radius: 4px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-    padding: 1rem;
-}
-
-.progress-bar {
+    top: 0;
+    left: 0;
+    right: 0;
     height: 4px;
-    background: #eee;
-    border-radius: 2px;
-    overflow: hidden;
-    margin: 8px 0;
+    background: rgba(0, 0, 0, 0.1);
+    z-index: 1000;
 }
 
-.progress {
+.upload-progress .progress {
     height: 100%;
     background: var(--primary-color);
     width: 0;
     transition: width 0.3s ease;
 }
 
-/* Responsive design */
-@media (max-width: 768px) {
-    .list-view .file-item {
-        grid-template-columns: auto 1fr auto;
+.upload-progress .progress-text {
+    position: fixed;
+    top: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--bg-color);
+    padding: 8px 16px;
+    border-radius: 4px;
+    font-size: 14px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    z-index: 1001;
+}
+
+.upload-message {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    padding: 12px 24px;
+    border-radius: 4px;
+    color: white;
+    font-size: 14px;
+    z-index: 1000;
+    animation: slideIn 0.3s ease;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.upload-message.success {
+    background: #4caf50;
+}
+
+.upload-message.error {
+    background: #f44336;
+}
+
+@keyframes slideIn {
+    from {
+        transform: translateY(100%);
+        opacity: 0;
     }
-    
-    .modified {
-        display: none;
+    to {
+        transform: translateY(0);
+        opacity: 1;
     }
 }
 
@@ -327,9 +371,8 @@ button:disabled {
     top: 0;
     background: var(--bg-color);
     z-index: 100;
-    padding: 20px 20px 0;
+    padding: 16px;
     box-shadow: var(--header-shadow);
-    flex-shrink: 0;
 }
 
 .header-container > div {
@@ -347,9 +390,9 @@ button:disabled {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    gap: 1rem;
-    flex-wrap: nowrap;
-    min-height: 48px;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
 }
 
 .actions {
@@ -449,16 +492,17 @@ button:disabled {
 
 /* Theme toggle button */
 .theme-toggle {
-    padding: 8px;
+    width: 40px;
+    height: 40px;
     border-radius: 50%;
-    background: transparent;
     border: 1px solid var(--border-color);
+    background: transparent;
     cursor: pointer;
-    font-size: 1.2rem;
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: background-color 0.3s;
+    font-size: 20px;
+    transition: all var(--transition-speed);
 }
 
 .theme-toggle:hover {
@@ -468,71 +512,25 @@ button:disabled {
 #file-browser {
     flex: 1;
     overflow: auto;
-    padding: 20px;
-    margin-top: 0;
+    padding: 16px;
 }
 
-.upload-progress {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 4px;
-    background: rgba(0, 0, 0, 0.1);
-    z-index: 1000;
-}
-
-.upload-progress .progress {
-    height: 100%;
-    background: var(--primary-color);
-    width: 0;
-    transition: width 0.3s ease;
-}
-
-.upload-progress .progress-text {
-    position: absolute;
-    top: 8px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: var(--bg-primary);
-    padding: 4px 12px;
-    border-radius: 4px;
-    font-size: 14px;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-}
-
-.upload-message {
-    position: fixed;
-    bottom: 24px;
-    right: 24px;
-    padding: 12px 24px;
-    border-radius: 4px;
-    color: white;
-    font-size: 14px;
-    z-index: 1000;
-    animation: slideIn 0.3s ease;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-}
-
-.upload-message.success {
-    background: #4caf50;
-}
-
-.upload-message.error {
-    background: #f44336;
-}
-
-@keyframes slideIn {
-    from {
-        transform: translateY(100%);
-        opacity: 0;
+/* Mobile responsiveness */
+@media (max-width: 768px) {
+    #toolbar {
+        flex-direction: column;
+        align-items: stretch;
     }
-    to {
-        transform: translateY(0);
-        opacity: 1;
-    }
-}
 
-.hidden {
-    display: none !important;
+    .grid-view {
+        grid-template-columns: 1fr;
+    }
+
+    .file-item {
+        grid-template-columns: auto 1fr auto;
+    }
+
+    .modified {
+        display: none;
+    }
 } 

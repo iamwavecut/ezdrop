@@ -44,18 +44,49 @@ class FileBrowser {
         });
         this.resizeObserver.observe(document.getElementById('file-browser'));
 
-        // Initialize CRC32 table
-        this.crc32Table = (() => {
-            const table = new Uint32Array(256);
-            for (let i = 0; i < 256; i++) {
-                let c = i;
-                for (let j = 0; j < 8; j++) {
-                    c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+        // Initialize worker pool for CRC32 calculation
+        this.workerPool = new Array(navigator.hardwareConcurrency || 4).fill(null).map(() => {
+            const worker = new Worker(URL.createObjectURL(new Blob([`
+                const crc32Table = new Uint32Array(256);
+                for (let i = 0; i < 256; i++) {
+                    let c = i;
+                    for (let j = 0; j < 8; j++) {
+                        c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+                    }
+                    crc32Table[i] = c;
                 }
-                table[i] = c;
-            }
-            return table;
-        })();
+
+                self.onmessage = async function(e) {
+                    const { id, chunk } = e.data;
+                    let crc = 0xFFFFFFFF;
+                    const bytes = new Uint8Array(await chunk.arrayBuffer());
+                    
+                    for (let i = 0; i < bytes.length; i++) {
+                        crc = (crc >>> 8) ^ crc32Table[(crc ^ bytes[i]) & 0xFF];
+                    }
+                    
+                    self.postMessage({ id, checksum: (crc ^ 0xFFFFFFFF) >>> 0 });
+                };
+            `], { type: 'text/javascript' })));
+
+            worker.busy = false;
+            return worker;
+        });
+
+        this.workerPromises = new Map();
+        this.nextWorkerId = 0;
+
+        this.workerPool.forEach(worker => {
+            worker.onmessage = (e) => {
+                const { id, checksum } = e.data;
+                const resolve = this.workerPromises.get(id);
+                if (resolve) {
+                    resolve(checksum);
+                    this.workerPromises.delete(id);
+                }
+                worker.busy = false;
+            };
+        });
     }
 
     setupEventListeners() {
@@ -647,20 +678,20 @@ class FileBrowser {
     }
 
     async calculateCRC32(blob) {
-        const CHUNK_SIZE = 64 * 1024; // Read in 64KB chunks for memory efficiency
-        let crc = 0xFFFFFFFF;
-        
-        for (let offset = 0; offset < blob.size; offset += CHUNK_SIZE) {
-            const chunk = blob.slice(offset, Math.min(offset + CHUNK_SIZE, blob.size));
-            const buffer = await chunk.arrayBuffer();
-            const bytes = new Uint8Array(buffer);
-            
-            for (let i = 0; i < bytes.length; i++) {
-                crc = (crc >>> 8) ^ this.crc32Table[(crc ^ bytes[i]) & 0xFF];
-            }
+        const worker = this.workerPool.find(w => !w.busy);
+        if (!worker) {
+            // If all workers are busy, wait for the next available one
+            await new Promise(resolve => setTimeout(resolve, 10));
+            return this.calculateCRC32(blob);
         }
+
+        worker.busy = true;
+        const id = this.nextWorkerId++;
         
-        return (crc ^ 0xFFFFFFFF) >>> 0;
+        return new Promise(resolve => {
+            this.workerPromises.set(id, resolve);
+            worker.postMessage({ id, chunk: blob });
+        });
     }
 
     async handleFileDrop(files, targetPath) {
@@ -677,30 +708,46 @@ class FileBrowser {
         const totalSize = Array.from(files).reduce((acc, file) => acc + file.size, 0);
         let uploadedSize = 0;
 
+        const showMessage = (text, type = 'info', duration = 3000) => {
+            const message = document.createElement('div');
+            message.className = `upload-message ${type}`;
+            message.textContent = text;
+            document.body.appendChild(message);
+            setTimeout(() => message.remove(), duration);
+        };
+
         try {
-            // Process each file
             for (const file of files) {
-                // Calculate file checksum first
                 progressText.textContent = `Calculating checksum for ${file.name}...`;
                 const fileChecksum = await this.calculateCRC32(file);
                 
                 const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
                 const chunks = [];
 
-                // Prepare chunks
+                // Prepare chunks with parallel checksum calculation
+                const chunkPromises = [];
                 for (let i = 0; i < totalChunks; i++) {
                     const start = i * CHUNK_SIZE;
                     const end = Math.min(start + CHUNK_SIZE, file.size);
                     const chunkBlob = file.slice(start, end);
-                    const chunkChecksum = await this.calculateCRC32(chunkBlob);
                     
-                    chunks.push({
-                        index: i,
-                        data: chunkBlob,
-                        size: end - start,
-                        checksum: chunkChecksum
-                    });
+                    chunkPromises.push((async () => {
+                        const checksum = await this.calculateCRC32(chunkBlob);
+                        chunks[i] = {
+                            index: i,
+                            data: chunkBlob,
+                            size: end - start,
+                            checksum
+                        };
+                    })());
+
+                    // Process chunks in batches to avoid memory issues
+                    if (chunkPromises.length >= MAX_PARALLEL_UPLOADS) {
+                        await Promise.all(chunkPromises);
+                        chunkPromises.length = 0;
+                    }
                 }
+                await Promise.all(chunkPromises);
 
                 progressText.textContent = `Uploading ${file.name} (0/${totalChunks} chunks)...`;
 
