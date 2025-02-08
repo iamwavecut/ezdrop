@@ -22,7 +22,20 @@ class FileBrowser {
         document.documentElement.dataset.theme = this.theme;
         
         this.setupEventListeners();
-        this.loadCurrentDirectory();
+        
+        // Try to restore last directory
+        if (savedSettings.lastDirectory) {
+            this.currentPath = savedSettings.lastDirectory;
+        }
+        
+        this.loadCurrentDirectory().then(() => {
+            // If directory load failed, reset to root
+            if (document.querySelectorAll('.file-item').length === 0) {
+                this.currentPath = '';
+                this.loadCurrentDirectory();
+            }
+        });
+        
         this.updateColumnsCount();
         
         // Add resize observer to update columns count
@@ -496,8 +509,12 @@ class FileBrowser {
             if (items.length > 0) {
                 this.setCursor(0);
             }
+            // Save current directory in settings
+            this.saveSettings();
+            return true;
         } catch (error) {
             console.error('Error loading directory:', error);
+            return false;
         }
     }
 
@@ -617,38 +634,122 @@ class FileBrowser {
     }
 
     async handleFileDrop(files, targetPath) {
-        const formData = new FormData();
-        const totalSize = Array.from(files).reduce((acc, file) => acc + file.size, 0);
-        let uploadedSize = 0;
-
-        Array.from(files).forEach(file => {
-            formData.append('files', file);
-        });
+        const CHUNK_SIZE = 1024 * 1024; // 1MB chunks
+        const MAX_RETRIES = 3;
+        const MAX_PARALLEL_UPLOADS = 3;
+        const RETRY_DELAY = 1000; // 1 second
 
         const progress = document.getElementById('upload-progress');
         progress.classList.remove('hidden');
         const progressBar = progress.querySelector('.progress');
         const progressText = progress.querySelector('.progress-text');
 
-        try {
-            progressText.textContent = `Uploading ${files.length} file(s)...`;
-            const response = await fetch(`/api/upload?dir=${encodeURIComponent(targetPath)}`, {
-                method: 'POST',
-                body: formData
-            });
+        const totalSize = Array.from(files).reduce((acc, file) => acc + file.size, 0);
+        let uploadedSize = 0;
 
-            if (!response.ok) {
-                throw new Error(`Upload failed: ${response.statusText}`);
+        try {
+            // Process each file
+            for (const file of files) {
+                const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+                const chunks = [];
+
+                // Prepare chunks
+                for (let i = 0; i < totalChunks; i++) {
+                    const start = i * CHUNK_SIZE;
+                    const end = Math.min(start + CHUNK_SIZE, file.size);
+                    chunks.push({
+                        index: i,
+                        data: file.slice(start, end),
+                        size: end - start
+                    });
+                }
+
+                progressText.textContent = `Uploading ${file.name} (0/${totalChunks} chunks)...`;
+
+                // Upload chunks in parallel with retries
+                const failedChunks = new Set();
+                let completedChunks = 0;
+
+                const uploadChunk = async (chunk) => {
+                    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+                        try {
+                            const chunkInfo = {
+                                fileName: file.name,
+                                chunkIndex: chunk.index,
+                                totalChunks: totalChunks,
+                                chunkSize: chunk.size,
+                                totalSize: file.size
+                            };
+
+                            const response = await fetch(`/api/upload/chunk?dir=${encodeURIComponent(targetPath)}`, {
+                                method: 'POST',
+                                body: JSON.stringify(chunkInfo),
+                                headers: {
+                                    'Content-Type': 'application/json'
+                                }
+                            });
+
+                            if (!response.ok) {
+                                throw new Error(`Upload failed: ${response.statusText}`);
+                            }
+
+                            completedChunks++;
+                            uploadedSize += chunk.size;
+
+                            // Update progress
+                            const fileProgress = (completedChunks / totalChunks) * 100;
+                            const totalProgress = (uploadedSize / totalSize) * 100;
+                            progressBar.style.width = `${totalProgress}%`;
+                            progressText.textContent = `Uploading ${file.name} (${completedChunks}/${totalChunks} chunks, ${fileProgress.toFixed(1)}%)`;
+
+                            return;
+                        } catch (error) {
+                            console.error(`Chunk ${chunk.index} upload failed (attempt ${attempt + 1}):`, error);
+                            if (attempt === MAX_RETRIES - 1) {
+                                failedChunks.add(chunk.index);
+                                throw error;
+                            }
+                            await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+                        }
+                    }
+                };
+
+                // Upload chunks in parallel
+                while (chunks.length > 0 || failedChunks.size > 0) {
+                    const batch = [];
+                    
+                    // Add failed chunks to the next batch
+                    for (const index of failedChunks) {
+                        const chunk = chunks.find(c => c.index === index);
+                        if (chunk) {
+                            batch.push(chunk);
+                            failedChunks.delete(index);
+                        }
+                    }
+
+                    // Fill the batch with new chunks
+                    while (batch.length < MAX_PARALLEL_UPLOADS && chunks.length > 0) {
+                        batch.push(chunks.shift());
+                    }
+
+                    if (batch.length === 0) break;
+
+                    try {
+                        await Promise.all(batch.map(chunk => uploadChunk(chunk)));
+                    } catch (error) {
+                        console.error('Batch upload failed:', error);
+                    }
+                }
+
+                if (failedChunks.size > 0) {
+                    throw new Error(`Failed to upload ${failedChunks.size} chunks of ${file.name}`);
+                }
             }
-            
-            const result = await response.json();
-            progressText.textContent = `Successfully uploaded ${result.files.length} file(s)`;
-            progressBar.style.width = '100%';
-            
+
             // Show success message
             const message = document.createElement('div');
             message.className = 'upload-message success';
-            message.textContent = result.message;
+            message.textContent = `Successfully uploaded ${files.length} file(s)`;
             document.body.appendChild(message);
             setTimeout(() => message.remove(), 3000);
 
@@ -734,6 +835,7 @@ class FileBrowser {
         if (file.isDir) {
             this.currentPath = file.path;
             this.loadCurrentDirectory();
+            this.saveSettings();
         } else {
             this.downloadFiles([file.path]);
         }
@@ -782,6 +884,7 @@ class FileBrowser {
             const parentPath = this.currentPath.split('/').slice(0, -1).join('/');
             this.currentPath = parentPath;
             this.loadCurrentDirectory();
+            this.saveSettings();
         }
     }
 
@@ -843,7 +946,8 @@ class FileBrowser {
             sortField: this.sortField,
             sortDirection: this.sortDirection,
             viewMode: this.viewMode,
-            theme: this.theme
+            theme: this.theme,
+            lastDirectory: this.currentPath
         };
         localStorage.setItem('fileBrowserSettings', JSON.stringify(settings));
     }

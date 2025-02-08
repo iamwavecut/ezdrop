@@ -163,6 +163,7 @@ body {
     user-select: none;
     background: var(--bg-color);
     border-color: var(--border-color);
+    z-index: 1;
 }
 
 .file-item:hover {
@@ -176,6 +177,9 @@ body {
 
 .file-item.cursor {
     outline: 2px solid var(--primary-color);
+    outline-offset: -2px;
+    z-index: 2;
+    position: relative;
 }
 
 .file-item .icon {

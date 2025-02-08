@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"text/template"
 	"time"
 
@@ -36,6 +37,14 @@ type FileInfo struct {
 	Size    int64  `json:"size"`
 	IsDir   bool   `json:"isDir"`
 	ModTime string `json:"modTime"`
+}
+
+type ChunkInfo struct {
+	FileName    string `json:"fileName"`
+	ChunkIndex  int    `json:"chunkIndex"`
+	TotalChunks int    `json:"totalChunks"`
+	ChunkSize   int64  `json:"chunkSize"`
+	TotalSize   int64  `json:"totalSize"`
 }
 
 func main() {
@@ -81,6 +90,7 @@ func main() {
 	http.HandleFunc("/api/list", SecurityMiddleware(securityConfig, handleList(baseDir)))
 	http.HandleFunc("/api/upload", SecurityMiddleware(securityConfig, handleUpload(baseDir)))
 	http.HandleFunc("/api/download", SecurityMiddleware(securityConfig, handleDownload(baseDir)))
+	http.HandleFunc("/api/upload/chunk", SecurityMiddleware(securityConfig, handleChunkUpload(baseDir)))
 
 	log.Printf("Starting server on :%s serving directory %s (read-only: %v)", *port, baseDir, *readOnly)
 	if err := http.ListenAndServe(":"+*port, nil); err != nil {
@@ -319,4 +329,174 @@ func handleDownload(baseDir string) http.HandlerFunc {
 			}
 		}
 	}
+}
+
+func handleChunkUpload(baseDir string) http.HandlerFunc {
+	var (
+		activeUploads   = make(map[string]*ChunkedUpload)
+		activeUploadsMu sync.RWMutex
+	)
+
+	// Cleanup routine for abandoned uploads
+	go func() {
+		for {
+			time.Sleep(time.Minute)
+			activeUploadsMu.Lock()
+			for id, upload := range activeUploads {
+				if time.Since(upload.LastActivity) > 10*time.Minute {
+					upload.Cleanup()
+					delete(activeUploads, id)
+					log.Printf("Cleaned up abandoned upload: %s", id)
+				}
+			}
+			activeUploadsMu.Unlock()
+		}
+	}()
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		targetDir := r.URL.Query().Get("dir")
+		if targetDir == "" {
+			targetDir = baseDir
+		} else {
+			targetDir = filepath.Join(baseDir, targetDir)
+		}
+
+		if !strings.HasPrefix(targetDir, baseDir) {
+			http.Error(w, "Invalid directory", http.StatusBadRequest)
+			return
+		}
+
+		// Parse chunk info
+		var chunkInfo ChunkInfo
+		if err := json.NewDecoder(r.Body).Decode(&chunkInfo); err != nil {
+			http.Error(w, "Invalid chunk info", http.StatusBadRequest)
+			return
+		}
+
+		// Generate upload ID based on filename and total size
+		uploadID := fmt.Sprintf("%s_%d", chunkInfo.FileName, chunkInfo.TotalSize)
+
+		activeUploadsMu.Lock()
+		upload, exists := activeUploads[uploadID]
+		if !exists {
+			upload = NewChunkedUpload(chunkInfo.FileName, targetDir, chunkInfo.TotalChunks, chunkInfo.TotalSize)
+			activeUploads[uploadID] = upload
+			log.Printf("Started new chunked upload: %s (%d chunks, %d bytes)",
+				chunkInfo.FileName, chunkInfo.TotalChunks, chunkInfo.TotalSize)
+		}
+		activeUploadsMu.Unlock()
+
+		// Handle chunk data
+		chunk := make([]byte, chunkInfo.ChunkSize)
+		_, err := io.ReadFull(r.Body, chunk)
+		if err != nil {
+			http.Error(w, "Error reading chunk data", http.StatusBadRequest)
+			return
+		}
+
+		if err := upload.WriteChunk(chunkInfo.ChunkIndex, chunk); err != nil {
+			http.Error(w, fmt.Sprintf("Error writing chunk: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		// Check if upload is complete
+		if upload.IsComplete() {
+			if err := upload.Finalize(); err != nil {
+				http.Error(w, fmt.Sprintf("Error finalizing upload: %v", err), http.StatusInternalServerError)
+				return
+			}
+			activeUploadsMu.Lock()
+			delete(activeUploads, uploadID)
+			activeUploadsMu.Unlock()
+			log.Printf("Completed chunked upload: %s", chunkInfo.FileName)
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+type ChunkedUpload struct {
+	FileName     string
+	TargetPath   string
+	TotalChunks  int
+	TotalSize    int64
+	ReceivedSize int64
+	Chunks       map[int][]byte
+	TempDir      string
+	LastActivity time.Time
+	mu           sync.Mutex
+}
+
+func NewChunkedUpload(fileName, targetDir string, totalChunks int, totalSize int64) *ChunkedUpload {
+	tempDir, err := os.MkdirTemp("", "upload_*")
+	if err != nil {
+		log.Printf("Error creating temp directory: %v", err)
+		return nil
+	}
+
+	return &ChunkedUpload{
+		FileName:     fileName,
+		TargetPath:   filepath.Join(targetDir, fileName),
+		TotalChunks:  totalChunks,
+		TotalSize:    totalSize,
+		Chunks:       make(map[int][]byte),
+		TempDir:      tempDir,
+		LastActivity: time.Now(),
+	}
+}
+
+func (u *ChunkedUpload) WriteChunk(index int, data []byte) error {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	chunkPath := filepath.Join(u.TempDir, fmt.Sprintf("chunk_%d", index))
+	if err := os.WriteFile(chunkPath, data, 0o644); err != nil {
+		return err
+	}
+
+	u.ReceivedSize += int64(len(data))
+	u.LastActivity = time.Now()
+	return nil
+}
+
+func (u *ChunkedUpload) IsComplete() bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.ReceivedSize >= u.TotalSize
+}
+
+func (u *ChunkedUpload) Finalize() error {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	// Create target file
+	dst, err := os.Create(u.TargetPath)
+	if err != nil {
+		return err
+	}
+	defer dst.Close()
+
+	// Combine chunks in order
+	for i := 0; i < u.TotalChunks; i++ {
+		chunkPath := filepath.Join(u.TempDir, fmt.Sprintf("chunk_%d", i))
+		data, err := os.ReadFile(chunkPath)
+		if err != nil {
+			return err
+		}
+		if _, err := dst.Write(data); err != nil {
+			return err
+		}
+	}
+
+	// Cleanup temp files
+	return u.Cleanup()
+}
+
+func (u *ChunkedUpload) Cleanup() error {
+	return os.RemoveAll(u.TempDir)
 }
