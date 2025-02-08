@@ -1,5 +1,6 @@
-// Constants for file validation
-const MAX_FILE_SIZE = 32 * 1024 * 1024; // 32MB - matching server config
+// Constants for file validation and chunking
+const MAX_CHUNK_SIZE = 5 * 1024 * 1024; // 5MB chunks for stable upload
+const MIN_CHUNK_SIZE = 256 * 1024; // 256KB minimum chunk size
 const ALLOWED_MIME_TYPES = new Set([
     'text/plain',
     'text/html',
@@ -22,6 +23,16 @@ const ALLOWED_MIME_TYPES = new Set([
     'application/x-zip-compressed',
     'application/octet-stream'
 ]);
+
+// CRC32 table for streaming calculation
+const crc32Table = new Uint32Array(256);
+for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let j = 0; j < 8; j++) {
+        c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    }
+    crc32Table[i] = c;
+}
 
 class FileBrowser {
     constructor() {
@@ -68,136 +79,174 @@ class FileBrowser {
             this.updateColumnsCount();
         });
         this.resizeObserver.observe(document.getElementById('file-browser'));
-
-        // Initialize worker pool for CRC32 calculation
-        this.initWorkerPool();
     }
 
-    initWorkerPool() {
-        const workerCount = navigator.hardwareConcurrency || 4;
-        this.workerPool = new Array(workerCount).fill(null).map(() => {
-            const worker = new Worker('/static/js/crc32.worker.js');
-
-            worker.busy = false;
-            worker.errorCount = 0;
-            worker.lastError = null;
-            return worker;
-        });
-
-        this.workerPromises = new Map();
-        this.nextWorkerId = 0;
-
-        // Setup worker message handling
-        this.workerPool.forEach(worker => {
-            worker.onmessage = (e) => {
-                const { id, checksum, error } = e.data;
-                const resolve = this.workerPromises.get(id);
-                if (resolve) {
-                    if (error) {
-                        worker.errorCount++;
-                        worker.lastError = error;
-                        resolve({ error });
-                    } else {
-                        worker.errorCount = 0;
-                        worker.lastError = null;
-                        resolve({ checksum });
-                    }
-                    this.workerPromises.delete(id);
-                }
-                worker.busy = false;
-            };
-
-            worker.onerror = (error) => {
-                worker.errorCount++;
-                worker.lastError = error.message;
-                worker.busy = false;
-                // Recreate worker if it has too many errors
-                if (worker.errorCount > 5) {
-                    this.recreateWorker(worker);
-                }
-            };
-        });
-
-        // Setup cleanup interval
-        this.cleanupInterval = setInterval(() => {
-            this.cleanupWorkerPromises();
-        }, 60000); // Cleanup every minute
+    // Calculate CRC32 for a chunk of data
+    calculateCRC32(bytes, initialCrc = 0xFFFFFFFF) {
+        let crc = initialCrc;
+        for (let i = 0; i < bytes.length; i++) {
+            crc = (crc >>> 8) ^ crc32Table[(crc ^ bytes[i]) & 0xFF];
+        }
+        return crc;
     }
 
-    recreateWorker(oldWorker) {
-        const index = this.workerPool.indexOf(oldWorker);
-        if (index === -1) return;
-
-        oldWorker.terminate();
-        this.initWorker(index);
+    // Finalize CRC32 calculation
+    finalizeCRC32(crc) {
+        return (crc ^ 0xFFFFFFFF) >>> 0;
     }
 
-    initWorker(index) {
-        const worker = new Worker('/static/js/crc32.worker.js');
+    async handleFileDrop(files, targetPath) {
+        if (!files || files.length === 0) {
+            console.warn('No files to upload');
+            return;
+        }
 
-        worker.busy = false;
-        worker.errorCount = 0;
-        worker.lastError = null;
+        const MAX_RETRIES = 3;
+        const RETRY_DELAY = 1000; // 1 second
+        const PROGRESS_UPDATE_INTERVAL = 100; // Update progress every 100ms
+
+        // Calculate optimal chunk size based on file size
+        const getOptimalChunkSize = (fileSize) => {
+            if (fileSize <= 1024 * 1024) { // <= 1MB
+                return MIN_CHUNK_SIZE; // 256KB chunks
+            } else if (fileSize <= 100 * 1024 * 1024) { // <= 100MB
+                return Math.min(1024 * 1024, MAX_CHUNK_SIZE); // 1MB chunks or max
+            } else if (fileSize <= 1024 * 1024 * 1024) { // <= 1GB
+                return Math.min(5 * 1024 * 1024, MAX_CHUNK_SIZE); // 5MB chunks or max
+            } else {
+                return MAX_CHUNK_SIZE; // Maximum chunk size for very large files
+            }
+        };
+
+        const progress = document.getElementById('upload-progress');
+        progress.classList.remove('hidden');
+        const progressBar = progress.querySelector('.progress');
+        const progressText = progress.querySelector('.progress-text');
+
+        const showMessage = (text, type = 'info', duration = 3000) => {
+            const message = document.createElement('div');
+            message.className = `upload-message ${type}`;
+            message.textContent = text;
+            document.body.appendChild(message);
+            setTimeout(() => message.remove(), duration);
+        };
+
+        // Validate files before starting upload
+        const validFiles = [];
+        const invalidFiles = [];
         
-        worker.onmessage = (e) => {
-            const { id, checksum, error } = e.data;
-            const resolve = this.workerPromises.get(id);
-            if (resolve) {
-                if (error) {
-                    worker.errorCount++;
-                    worker.lastError = error;
-                    resolve({ error });
-                } else {
-                    worker.errorCount = 0;
-                    worker.lastError = null;
-                    resolve({ checksum });
+        for (const file of files) {
+            const validation = await this.validateFile(file);
+            if (validation.valid) {
+                validFiles.push(file);
+            } else {
+                invalidFiles.push({ file, reason: validation.reason });
+            }
+        }
+
+        // Show validation results
+        if (invalidFiles.length > 0) {
+            const message = invalidFiles.map(({ file, reason }) => 
+                `${file.name}: ${reason}`
+            ).join('\n');
+            showMessage(`Some files were skipped:\n${message}`, 'error', 5000);
+        }
+
+        if (validFiles.length === 0) {
+            progress.classList.add('hidden');
+            return;
+        }
+
+        const totalSize = validFiles.reduce((acc, file) => acc + file.size, 0);
+        let uploadedSize = 0;
+        let lastProgressUpdate = 0;
+
+        try {
+            for (const file of validFiles) {
+                const chunkSize = getOptimalChunkSize(file.size);
+                const totalChunks = Math.ceil(file.size / chunkSize);
+                let fileCrc = 0xFFFFFFFF;
+                let uploadedChunks = 0;
+
+                progressText.textContent = `Uploading ${file.name} (0/${totalChunks} chunks)...`;
+
+                for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+                    const start = chunkIndex * chunkSize;
+                    const end = Math.min(start + chunkSize, file.size);
+                    const chunk = file.slice(start, end);
+                    const chunkBytes = new Uint8Array(await chunk.arrayBuffer());
+
+                    // Calculate CRCs
+                    const chunkCrc = this.finalizeCRC32(this.calculateCRC32(chunkBytes));
+                    fileCrc = this.calculateCRC32(chunkBytes, fileCrc);
+
+                    // Retry loop for chunk upload
+                    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+                        try {
+                            const formData = new FormData();
+                            formData.append('chunkInfo', JSON.stringify({
+                                fileName: file.name,
+                                chunkIndex: chunkIndex,
+                                totalChunks: totalChunks,
+                                chunkSize: end - start,
+                                totalSize: file.size,
+                                chunkChecksum: chunkCrc,
+                                fileChecksum: chunkIndex === totalChunks - 1 ? this.finalizeCRC32(fileCrc) : 0
+                            }));
+                            formData.append('chunkData', chunk, 'chunk');
+
+                            const response = await fetch(`/api/upload/chunk?dir=${encodeURIComponent(targetPath)}`, {
+                                method: 'POST',
+                                body: formData
+                            });
+
+                            if (!response.ok) {
+                                throw new Error(await response.text());
+                            }
+
+                            uploadedChunks++;
+                            uploadedSize += end - start;
+
+                            // Update progress
+                            const now = Date.now();
+                            if (now - lastProgressUpdate >= PROGRESS_UPDATE_INTERVAL) {
+                                const fileProgress = (uploadedChunks / totalChunks) * 100;
+                                const totalProgress = (uploadedSize / totalSize) * 100;
+                                progressBar.style.width = `${totalProgress}%`;
+                                progressText.textContent = `Uploading ${file.name} (${uploadedChunks}/${totalChunks} chunks, ${fileProgress.toFixed(1)}%)`;
+                                lastProgressUpdate = now;
+                            }
+
+                            break; // Success, exit retry loop
+                        } catch (error) {
+                            console.error(`Chunk ${chunkIndex} upload failed (attempt ${attempt + 1}):`, error);
+                            if (attempt === MAX_RETRIES - 1) {
+                                throw error;
+                            }
+                            await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+                        }
+                    }
                 }
-                this.workerPromises.delete(id);
             }
-            worker.busy = false;
-        };
 
-        worker.onerror = (error) => {
-            worker.errorCount++;
-            worker.lastError = error.message;
-            worker.busy = false;
-            if (worker.errorCount > 5) {
-                this.recreateWorker(worker);
-            }
-        };
-
-        this.workerPool[index] = worker;
-    }
-
-    cleanupWorkerPromises() {
-        const now = Date.now();
-        for (const [id, promise] of this.workerPromises.entries()) {
-            if (now - promise.timestamp > 30000) { // 30 seconds timeout
-                promise.reject(new Error('Worker timeout'));
-                this.workerPromises.delete(id);
-            }
+            showMessage(`Successfully uploaded ${validFiles.length} file(s)`, 'success');
+            await this.loadCurrentDirectory();
+        } catch (error) {
+            console.error('Upload error:', error);
+            showMessage(error.message, 'error');
+        } finally {
+            setTimeout(() => {
+                progress.classList.add('hidden');
+                progressBar.style.width = '0';
+                progressText.textContent = '';
+            }, 1000);
         }
     }
 
     cleanup() {
-        // Cleanup all resources
-        if (this.cleanupInterval) {
-            clearInterval(this.cleanupInterval);
-        }
-        
         if (this.resizeObserver) {
             this.resizeObserver.disconnect();
         }
-        
-        if (this.workerPool) {
-            this.workerPool.forEach(worker => {
-                if (worker) {
-                    worker.terminate();
-                }
-            });
-        }
-        
-        this.workerPromises.clear();
     }
 
     setupEventListeners() {
@@ -868,356 +917,6 @@ class FileBrowser {
         document.getElementById('download-btn').disabled = this.selectedFiles.size === 0;
     }
 
-    async calculateCRC32(blob) {
-        if (!this.workerPool || !Array.isArray(this.workerPool)) {
-            console.error('Worker pool not initialized properly');
-            throw new Error('Worker pool initialization failed');
-        }
-
-        // Find available worker or wait for one
-        let worker;
-        let attempts = 0;
-        while (!worker && attempts < 50) { // Maximum 5 seconds wait
-            worker = this.workerPool.find(w => w && !w.busy);
-            if (!worker) {
-                await new Promise(resolve => setTimeout(resolve, 100));
-                attempts++;
-            }
-        }
-
-        if (!worker) {
-            throw new Error('No workers available after timeout');
-        }
-
-        worker.busy = true;
-        const id = this.nextWorkerId++;
-        
-        return new Promise((resolve, reject) => {
-            try {
-                this.workerPromises.set(id, {
-                    resolve: (result) => {
-                        if (result.error) {
-                            reject(new Error(result.error));
-                        } else {
-                            resolve(result.checksum);
-                        }
-                    },
-                    reject,
-                    timestamp: Date.now()
-                });
-                worker.postMessage({ id, chunk: blob });
-            } catch (error) {
-                worker.busy = false;
-                this.workerPromises.delete(id);
-                reject(error);
-            }
-        });
-    }
-
-    async handleFileDrop(files, targetPath) {
-        if (!files || files.length === 0) {
-            console.warn('No files to upload');
-            return;
-        }
-
-        const MAX_RETRIES = 3;
-        const MAX_PARALLEL_UPLOADS = 3;
-        const RETRY_DELAY = 1000; // 1 second
-        const PROGRESS_UPDATE_INTERVAL = 100; // Update progress every 100ms
-
-        // Calculate optimal chunk size based on file size
-        const getOptimalChunkSize = (fileSize) => {
-            if (fileSize <= 1024 * 1024) { // <= 1MB
-                return 256 * 1024; // 256KB chunks
-            } else if (fileSize <= 100 * 1024 * 1024) { // <= 100MB
-                return 1024 * 1024; // 1MB chunks
-            } else if (fileSize <= 1024 * 1024 * 1024) { // <= 1GB
-                return 5 * 1024 * 1024; // 5MB chunks
-            } else {
-                return 10 * 1024 * 1024; // 10MB chunks
-            }
-        };
-
-        const progress = document.getElementById('upload-progress');
-        progress.classList.remove('hidden');
-        const progressBar = progress.querySelector('.progress');
-        const progressText = progress.querySelector('.progress-text');
-
-        const showMessage = (text, type = 'info', duration = 3000) => {
-            const message = document.createElement('div');
-            message.className = `upload-message ${type}`;
-            message.textContent = text;
-            document.body.appendChild(message);
-            setTimeout(() => message.remove(), duration);
-        };
-
-        // Validate files before starting upload
-        const validFiles = [];
-        const invalidFiles = [];
-        
-        for (const file of files) {
-            const validation = await this.validateFile(file, MAX_FILE_SIZE, ALLOWED_MIME_TYPES);
-            if (validation.valid) {
-                validFiles.push(file);
-            } else {
-                invalidFiles.push({ file, reason: validation.reason });
-            }
-        }
-
-        // Show validation results
-        if (invalidFiles.length > 0) {
-            const message = invalidFiles.map(({ file, reason }) => 
-                `${file.name}: ${reason}`
-            ).join('\n');
-            showMessage(`Some files were skipped:\n${message}`, 'error', 5000);
-        }
-
-        if (validFiles.length === 0) {
-            progress.classList.add('hidden');
-            return;
-        }
-
-        const totalSize = validFiles.reduce((acc, file) => acc + file.size, 0);
-        let uploadedSize = 0;
-        let lastProgressUpdate = 0;
-
-        // Batch progress updates
-        const updateProgress = (file, completedChunks, totalChunks, chunkSize) => {
-            const now = Date.now();
-            if (now - lastProgressUpdate < PROGRESS_UPDATE_INTERVAL) {
-                return;
-            }
-            lastProgressUpdate = now;
-
-            const fileProgress = (completedChunks / totalChunks) * 100;
-            const totalProgress = ((uploadedSize + (completedChunks * chunkSize)) / totalSize) * 100;
-            
-            progressBar.style.width = `${totalProgress}%`;
-            progressText.textContent = `Uploading ${file.name} (${completedChunks}/${totalChunks} chunks, ${fileProgress.toFixed(1)}%)`;
-        };
-
-        try {
-            for (const file of validFiles) {
-                const chunkSize = getOptimalChunkSize(file.size);
-                progressText.textContent = `Calculating checksum for ${file.name}...`;
-                
-                let fileChecksum;
-                try {
-                    fileChecksum = await this.calculateCRC32(file);
-                } catch (error) {
-                    console.error('Error calculating file checksum:', error);
-                    showMessage(`Error processing ${file.name}: ${error.message}`, 'error');
-                    continue;
-                }
-                
-                const totalChunks = Math.ceil(file.size / chunkSize);
-                const chunks = [];
-
-                // Prepare chunks with parallel checksum calculation
-                const chunkPromises = [];
-                for (let i = 0; i < totalChunks; i++) {
-                    const start = i * chunkSize;
-                    const end = Math.min(start + chunkSize, file.size);
-                    const chunkBlob = file.slice(start, end);
-                    
-                    chunkPromises.push((async () => {
-                        const checksum = await this.calculateCRC32(chunkBlob);
-                        chunks[i] = {
-                            index: i,
-                            data: chunkBlob,
-                            size: end - start,
-                            checksum
-                        };
-                    })());
-
-                    // Process chunks in batches to avoid memory issues
-                    if (chunkPromises.length >= MAX_PARALLEL_UPLOADS) {
-                        await Promise.all(chunkPromises);
-                        chunkPromises.length = 0;
-                    }
-                }
-                await Promise.all(chunkPromises);
-
-                progressText.textContent = `Uploading ${file.name} (0/${totalChunks} chunks)...`;
-
-                // Upload chunks in parallel with retries
-                const failedChunks = new Set();
-                let completedChunks = 0;
-
-                const uploadChunk = async (chunk) => {
-                    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-                        try {
-                            const formData = new FormData();
-                            formData.append('chunkInfo', JSON.stringify({
-                                fileName: file.name,
-                                chunkIndex: chunk.index,
-                                totalChunks: totalChunks,
-                                chunkSize: chunk.size,
-                                totalSize: file.size,
-                                chunkChecksum: chunk.checksum,
-                                fileChecksum: fileChecksum
-                            }));
-                            formData.append('chunkData', chunk.data, 'chunk');
-
-                            const response = await fetch(`/api/upload/chunk?dir=${encodeURIComponent(targetPath)}`, {
-                                method: 'POST',
-                                body: formData
-                            });
-
-                            if (!response.ok) {
-                                const error = await response.text();
-                                throw new Error(error || `Upload failed: ${response.statusText}`);
-                            }
-
-                            completedChunks++;
-                            uploadedSize += chunk.size;
-                            updateProgress(file, completedChunks, totalChunks, chunkSize);
-
-                            return;
-                        } catch (error) {
-                            console.error(`Chunk ${chunk.index} upload failed (attempt ${attempt + 1}):`, error);
-                            if (attempt === MAX_RETRIES - 1) {
-                                failedChunks.add(chunk.index);
-                                throw error;
-                            }
-                            await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
-                        }
-                    }
-                };
-
-                // Upload chunks in parallel
-                while (chunks.length > 0 || failedChunks.size > 0) {
-                    const batch = [];
-                    
-                    // Add failed chunks to the next batch
-                    for (const index of failedChunks) {
-                        const chunk = chunks.find(c => c.index === index);
-                        if (chunk) {
-                            batch.push(chunk);
-                            failedChunks.delete(index);
-                        }
-                    }
-
-                    // Fill the batch with new chunks
-                    while (batch.length < MAX_PARALLEL_UPLOADS && chunks.length > 0) {
-                        batch.push(chunks.shift());
-                    }
-
-                    if (batch.length === 0) break;
-
-                    try {
-                        await Promise.all(batch.map(chunk => uploadChunk(chunk)));
-                    } catch (error) {
-                        console.error('Batch upload failed:', error);
-                    }
-                }
-
-                if (failedChunks.size > 0) {
-                    throw new Error(`Failed to upload ${failedChunks.size} chunks of ${file.name}`);
-                }
-            }
-
-            // Show success message
-            const message = document.createElement('div');
-            message.className = 'upload-message success';
-            message.textContent = `Successfully uploaded ${validFiles.length} file(s)`;
-            document.body.appendChild(message);
-            setTimeout(() => message.remove(), 3000);
-
-            await this.loadCurrentDirectory();
-        } catch (error) {
-            console.error('Upload error:', error);
-            // Show error message
-            const message = document.createElement('div');
-            message.className = 'upload-message error';
-            message.textContent = error.message;
-            document.body.appendChild(message);
-            setTimeout(() => message.remove(), 3000);
-        } finally {
-            // Hide progress after a short delay
-            setTimeout(() => {
-                progress.classList.add('hidden');
-                progressBar.style.width = '0';
-                progressText.textContent = '';
-            }, 1000);
-        }
-    }
-
-    downloadSelected() {
-        if (this.selectedFiles.size > 0) {
-            const paths = Array.from(this.selectedFiles);
-            this.downloadFiles(paths);
-        } else {
-            // If no selection but cursor is on a file, download that file
-            const cursorItem = document.querySelector('.file-item.cursor');
-            if (cursorItem && !cursorItem.classList.contains('parent-dir')) {
-                this.downloadFiles([cursorItem.dataset.path]);
-            }
-        }
-    }
-
-    formatSize(bytes) {
-        const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-        let size = bytes;
-        let unit = 0;
-        while (size >= 1024 && unit < units.length - 1) {
-            size /= 1024;
-            unit++;
-        }
-        return `${size.toFixed(1)} ${units[unit]}`;
-    }
-
-    toggleViewMode(mode) {
-        const browser = document.getElementById('file-browser');
-        const app = document.getElementById('app');
-        
-        browser.classList.remove('list-view', 'grid-view');
-        browser.classList.add(`${mode}-view`);
-        
-        // Toggle app container class for grid mode
-        if (mode === 'grid') {
-            app.classList.add('grid-mode');
-        } else {
-            app.classList.remove('grid-mode');
-        }
-        
-        this.viewMode = mode;
-        this.updateColumnsCount();
-        this.saveSettings();
-    }
-
-    updateSortIndicators() {
-        document.querySelectorAll('.sort-control').forEach(btn => {
-            btn.classList.remove('sort-asc', 'sort-desc');
-            if (btn.dataset.sort === this.sortField) {
-                btn.classList.add(`sort-${this.sortDirection}`);
-            }
-        });
-        this.saveSettings();
-    }
-
-    handleSingleClick(item, file, e) {
-        if (e.ctrlKey || e.metaKey) {
-            this.toggleFileSelection(item, true);
-        } else if (e.shiftKey && this.lastSelectedIndex !== -1) {
-            const index = Array.from(item.parentElement.children).indexOf(item);
-            this.selectRange(this.lastSelectedIndex, index);
-        } else {
-            this.clearSelection();
-            this.setCursor(Array.from(item.parentElement.children).indexOf(item));
-        }
-    }
-
-    handleDoubleClick(file) {
-        if (file.isDir) {
-            this.currentPath = file.path;
-            this.loadCurrentDirectory();
-            this.saveSettings();
-        } else {
-            this.downloadFiles([file.path]);
-        }
-    }
-
     sortFiles(files) {
         // Handle null/undefined/empty files array
         if (!files || !Array.isArray(files)) {
@@ -1462,18 +1161,18 @@ class FileBrowser {
         });
     }
 
-    async validateFile(file, maxSize, allowedTypes) {
+    async validateFile(file) {
         // Check file size
-        if (file.size > maxSize) {
+        if (file.size > MAX_CHUNK_SIZE || file.size < MIN_CHUNK_SIZE) {
             return {
                 valid: false,
-                reason: `File size exceeds maximum allowed size (${this.formatSize(maxSize)})`
+                reason: `File size must be between ${this.formatSize(MIN_CHUNK_SIZE)} and ${this.formatSize(MAX_CHUNK_SIZE)}`
             };
         }
 
         // Check MIME type
         const mimeType = file.type || await this.getMimeType(file);
-        if (!allowedTypes.has(mimeType)) {
+        if (!ALLOWED_MIME_TYPES.has(mimeType)) {
             return {
                 valid: false,
                 reason: `File type not allowed (${mimeType})`
@@ -1547,6 +1246,57 @@ class FileBrowser {
         };
 
         return mimeMap[ext] || 'application/octet-stream';
+    }
+
+    handleSingleClick(item, file, e) {
+        if (e.ctrlKey || e.metaKey) {
+            this.toggleFileSelection(item, true);
+        } else if (e.shiftKey && this.lastSelectedIndex !== -1) {
+            const index = Array.from(item.parentElement.children).indexOf(item);
+            this.selectRange(this.lastSelectedIndex, index);
+        } else {
+            this.clearSelection();
+            this.setCursor(Array.from(item.parentElement.children).indexOf(item));
+        }
+    }
+
+    handleDoubleClick(file) {
+        if (file.isDir) {
+            this.currentPath = file.path;
+            this.loadCurrentDirectory();
+            this.saveSettings();
+        } else {
+            this.downloadFiles([file.path]);
+        }
+    }
+
+    toggleViewMode(mode) {
+        const browser = document.getElementById('file-browser');
+        const app = document.getElementById('app');
+        
+        browser.classList.remove('list-view', 'grid-view');
+        browser.classList.add(`${mode}-view`);
+        
+        // Toggle app container class for grid mode
+        if (mode === 'grid') {
+            app.classList.add('grid-mode');
+        } else {
+            app.classList.remove('grid-mode');
+        }
+        
+        this.viewMode = mode;
+        this.updateColumnsCount();
+        this.saveSettings();
+    }
+
+    updateSortIndicators() {
+        document.querySelectorAll('.sort-control').forEach(btn => {
+            btn.classList.remove('sort-asc', 'sort-desc');
+            if (btn.dataset.sort === this.sortField) {
+                btn.classList.add(`sort-${this.sortDirection}`);
+            }
+        });
+        this.saveSettings();
     }
 }
 

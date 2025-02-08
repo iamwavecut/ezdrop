@@ -20,7 +20,7 @@ type SecurityConfig struct {
 
 // Default security configuration
 var DefaultSecurityConfig = SecurityConfig{
-	MaxUploadSize:    32 << 20, // 32MB
+	MaxUploadSize:    5 << 20, // 5MB per chunk
 	AllowedFileTypes: []string{".txt", ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".jpg", ".jpeg", ".png", ".gif"},
 	ReadOnly:         false,
 	RateLimit:        NewRateLimiter(100, 10), // 100 requests per 10 seconds
@@ -118,10 +118,6 @@ func getIP(r *http.Request) string {
 // ScanFile performs basic file scanning (implement more thorough scanning as needed)
 func ScanFile(filename string, content []byte) error {
 	// Example implementation - extend with actual virus scanning
-	if int64(len(content)) > DefaultSecurityConfig.MaxUploadSize {
-		return fmt.Errorf("file too large")
-	}
-
 	if !ValidateFileType(filename, DefaultSecurityConfig.AllowedFileTypes) {
 		return fmt.Errorf("file type not allowed")
 	}
