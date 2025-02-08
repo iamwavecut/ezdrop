@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -12,18 +11,16 @@ import (
 
 // Security configuration
 type SecurityConfig struct {
-	MaxUploadSize    int64        // Maximum upload size in bytes
-	AllowedFileTypes []string     // List of allowed file extensions
-	ReadOnly         bool         // Read-only mode
-	RateLimit        *RateLimiter // Rate limiter for API endpoints
+	MaxUploadSize int64        // Maximum upload size in bytes
+	ReadOnly      bool         // Read-only mode
+	RateLimit     *RateLimiter // Rate limiter for API endpoints
 }
 
 // Default security configuration
 var DefaultSecurityConfig = SecurityConfig{
-	MaxUploadSize:    5 << 20, // 5MB per chunk
-	AllowedFileTypes: []string{".txt", ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".jpg", ".jpeg", ".png", ".gif"},
-	ReadOnly:         false,
-	RateLimit:        NewRateLimiter(100, 10), // 100 requests per 10 seconds
+	MaxUploadSize: 1 << 30, // 1GB per request, since we're using chunked uploads
+	ReadOnly:      false,
+	RateLimit:     NewRateLimiter(100, 10), // 100 requests per 10 seconds
 }
 
 // RateLimiter implements a token bucket rate limiter per IP
@@ -117,10 +114,5 @@ func getIP(r *http.Request) string {
 
 // ScanFile performs basic file scanning (implement more thorough scanning as needed)
 func ScanFile(filename string, content []byte) error {
-	// Example implementation - extend with actual virus scanning
-	if !ValidateFileType(filename, DefaultSecurityConfig.AllowedFileTypes) {
-		return fmt.Errorf("file type not allowed")
-	}
-
-	return nil
+	return nil // No restrictions on file types
 }

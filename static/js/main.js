@@ -1,28 +1,6 @@
 // Constants for file validation and chunking
 const MAX_CHUNK_SIZE = 5 * 1024 * 1024; // 5MB chunks for stable upload
 const MIN_CHUNK_SIZE = 256 * 1024; // 256KB minimum chunk size
-const ALLOWED_MIME_TYPES = new Set([
-    'text/plain',
-    'text/html',
-    'text/css',
-    'text/javascript',
-    'application/json',
-    'application/xml',
-    'application/pdf',
-    'application/msword',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    'application/vnd.ms-excel',
-    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    'image/jpeg',
-    'image/png',
-    'image/gif',
-    'audio/mpeg',
-    'audio/wav',
-    'video/mp4',
-    'application/zip',
-    'application/x-zip-compressed',
-    'application/octet-stream'
-]);
 
 // CRC32 table for streaming calculation
 const crc32Table = new Uint32Array(256);
@@ -261,7 +239,7 @@ class FileBrowser {
             const validation = await this.validateFile(file);
             if (validation.valid) {
                 validFiles.push(file);
-                    } else {
+            } else {
                 invalidFiles.push({ file, reason: validation.reason });
             }
         }
@@ -1193,24 +1171,7 @@ class FileBrowser {
     }
 
     async validateFile(file) {
-        // Check file size
-        if (file.size > MAX_CHUNK_SIZE || file.size < MIN_CHUNK_SIZE) {
-            return {
-                valid: false,
-                reason: `File size must be between ${this.formatSize(MIN_CHUNK_SIZE)} and ${this.formatSize(MAX_CHUNK_SIZE)}`
-            };
-        }
-
-        // Check MIME type
-        const mimeType = file.type || await this.getMimeType(file);
-        if (!ALLOWED_MIME_TYPES.has(mimeType)) {
-            return {
-                valid: false,
-                reason: `File type not allowed (${mimeType})`
-            };
-        }
-
-        // Additional security checks
+        // Only check for path traversal attempts
         if (file.name.includes('..') || file.name.startsWith('/')) {
             return {
                 valid: false,
@@ -1218,65 +1179,7 @@ class FileBrowser {
             };
         }
 
-        // Check for executable files
-        if (/\.(exe|dll|bat|cmd|sh|app)$/i.test(file.name)) {
-            return {
-                valid: false,
-                reason: 'Executable files are not allowed'
-            };
-        }
-
         return { valid: true };
-    }
-
-    async getMimeType(file) {
-        // Read the first few bytes of the file to determine its type
-        const buffer = await file.slice(0, 4100).arrayBuffer();
-        const arr = new Uint8Array(buffer);
-        
-        // Check for common file signatures
-        if (arr[0] === 0xFF && arr[1] === 0xD8 && arr[2] === 0xFF) {
-            return 'image/jpeg';
-        }
-        if (arr[0] === 0x89 && arr[1] === 0x50 && arr[2] === 0x4E && arr[3] === 0x47) {
-            return 'image/png';
-        }
-        if (arr[0] === 0x47 && arr[1] === 0x49 && arr[2] === 0x46) {
-            return 'image/gif';
-        }
-        if (arr[0] === 0x25 && arr[1] === 0x50 && arr[2] === 0x44 && arr[3] === 0x46) {
-            return 'application/pdf';
-        }
-        
-        // Check for ZIP-based formats
-        if (arr[0] === 0x50 && arr[1] === 0x4B && arr[2] === 0x03 && arr[3] === 0x04) {
-            // Check for Office formats
-            if (file.name.endsWith('.docx')) {
-                return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-            }
-            if (file.name.endsWith('.xlsx')) {
-                return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-            }
-            return 'application/zip';
-        }
-
-        // Default to checking the file extension
-        const ext = file.name.split('.').pop()?.toLowerCase();
-        const mimeMap = {
-            'txt': 'text/plain',
-            'html': 'text/html',
-            'css': 'text/css',
-            'js': 'text/javascript',
-            'json': 'application/json',
-            'xml': 'application/xml',
-            'doc': 'application/msword',
-            'xls': 'application/vnd.ms-excel',
-            'mp4': 'video/mp4',
-            'mp3': 'audio/mpeg',
-            'wav': 'audio/wav'
-        };
-
-        return mimeMap[ext] || 'application/octet-stream';
     }
 
     handleSingleClick(item, file, e) {
