@@ -81,6 +81,128 @@ class FileBrowser {
         this.resizeObserver.observe(document.getElementById('file-browser'));
     }
 
+    // Format file size with appropriate units
+    formatSize(bytes) {
+        const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        let size = bytes;
+        let unit = 0;
+        while (size >= 1024 && unit < units.length - 1) {
+            size /= 1024;
+            unit++;
+        }
+        return `${size.toFixed(1)} ${units[unit]}`;
+    }
+
+    // Save current settings to localStorage
+    saveSettings() {
+        const settings = {
+            sortField: this.sortField,
+            sortDirection: this.sortDirection,
+            viewMode: this.viewMode,
+            theme: this.theme,
+            lastDirectory: this.currentPath
+        };
+        localStorage.setItem('fileBrowserSettings', JSON.stringify(settings));
+    }
+
+    // Update columns count for grid view
+    updateColumnsCount() {
+        const browser = document.getElementById('file-browser');
+        if (this.viewMode === 'grid') {
+            const containerHeight = browser.clientHeight;
+            const items = browser.querySelectorAll('.file-item');
+            if (items.length > 0) {
+                const itemHeight = items[0].offsetHeight;
+                const rowsPerColumn = Math.floor(containerHeight / itemHeight);
+                this.columnsCount = rowsPerColumn;
+            }
+        } else {
+            this.columnsCount = 1;
+        }
+    }
+
+    // Download selected files
+    downloadSelected() {
+        if (this.selectedFiles.size > 0) {
+            const paths = Array.from(this.selectedFiles);
+            this.downloadFiles(paths);
+        } else {
+            // If no selection but cursor is on a file, download that file
+            const cursorItem = document.querySelector('.file-item.cursor');
+            if (cursorItem && !cursorItem.classList.contains('parent-dir')) {
+                this.downloadFiles([cursorItem.dataset.path]);
+            }
+        }
+    }
+
+    // Clear drag-over visual feedback
+    clearDragOverClass() {
+        document.querySelectorAll('.drag-over').forEach(el => {
+            el.classList.remove('drag-over');
+        });
+    }
+
+    // Find drop target element
+    findDropTarget(e) {
+        return e.target.closest('.file-item');
+    }
+
+    // Update selection summary display
+    updateSelectionSummary() {
+        const summary = document.getElementById('selection-summary');
+        if (this.selectedFiles.size === 0) {
+            summary.classList.remove('visible');
+            return;
+        }
+
+        const items = document.querySelectorAll('.file-item.selected');
+        let totalSize = 0;
+        let fileCount = 0;
+        let dirCount = 0;
+
+        items.forEach(item => {
+            if (item.dataset.isDir === 'true') {
+                dirCount++;
+            } else {
+                fileCount++;
+                const sizeText = item.querySelector('.size').textContent;
+                const size = this.parseSize(sizeText);
+                if (!isNaN(size)) {
+                    totalSize += size;
+                }
+            }
+        });
+
+        let text = '';
+        if (fileCount > 0) {
+            text += `${fileCount} file${fileCount !== 1 ? 's' : ''} (${this.formatSize(totalSize)})`;
+        }
+        if (dirCount > 0) {
+            if (text) text += ', ';
+            text += `${dirCount} folder${dirCount !== 1 ? 's' : ''}`;
+        }
+
+        summary.textContent = `Selected: ${text}`;
+        summary.classList.add('visible');
+    }
+
+    // Parse size string back to bytes
+    parseSize(sizeText) {
+        const units = {
+            'B': 1,
+            'KB': 1024,
+            'MB': 1024 * 1024,
+            'GB': 1024 * 1024 * 1024,
+            'TB': 1024 * 1024 * 1024 * 1024
+        };
+        
+        const match = sizeText.match(/^([\d.]+)\s*([KMGT]?B)$/);
+        if (!match) return NaN;
+        
+        const [, size, unit] = match;
+        return parseFloat(size) * (units[unit] || 1);
+    }
+
     // Calculate CRC32 for a chunk of data
     calculateCRC32(bytes, initialCrc = 0xFFFFFFFF) {
         let crc = initialCrc;
@@ -139,7 +261,7 @@ class FileBrowser {
             const validation = await this.validateFile(file);
             if (validation.valid) {
                 validFiles.push(file);
-            } else {
+                    } else {
                 invalidFiles.push({ file, reason: validation.reason });
             }
         }
@@ -671,60 +793,6 @@ class FileBrowser {
         deleteBtn.disabled = !hasSelection; // Only enable delete for explicit selection
     }
 
-    updateSelectionSummary() {
-        const summary = document.getElementById('selection-summary');
-        if (this.selectedFiles.size === 0) {
-            summary.classList.remove('visible');
-            return;
-        }
-
-        const items = document.querySelectorAll('.file-item.selected');
-        let totalSize = 0;
-        let fileCount = 0;
-        let dirCount = 0;
-
-        items.forEach(item => {
-            if (item.dataset.isDir === 'true') {
-                dirCount++;
-            } else {
-                fileCount++;
-                const sizeText = item.querySelector('.size').textContent;
-                const size = this.parseSize(sizeText);
-                if (!isNaN(size)) {
-                    totalSize += size;
-                }
-            }
-        });
-
-        let text = '';
-        if (fileCount > 0) {
-            text += `${fileCount} file${fileCount !== 1 ? 's' : ''} (${this.formatSize(totalSize)})`;
-        }
-        if (dirCount > 0) {
-            if (text) text += ', ';
-            text += `${dirCount} folder${dirCount !== 1 ? 's' : ''}`;
-        }
-
-        summary.textContent = `Selected: ${text}`;
-        summary.classList.add('visible');
-    }
-
-    parseSize(sizeText) {
-        const units = {
-            'B': 1,
-            'KB': 1024,
-            'MB': 1024 * 1024,
-            'GB': 1024 * 1024 * 1024,
-            'TB': 1024 * 1024 * 1024 * 1024
-        };
-        
-        const match = sizeText.match(/^([\d.]+)\s*([KMGT]?B)$/);
-        if (!match) return NaN;
-        
-        const [, size, unit] = match;
-        return parseFloat(size) * (units[unit] || 1);
-    }
-
     scrollIntoView(element) {
         if (!element) return;
         
@@ -770,16 +838,6 @@ class FileBrowser {
                 });
             }
         }
-    }
-
-    clearDragOverClass() {
-        document.querySelectorAll('.drag-over').forEach(el => {
-            el.classList.remove('drag-over');
-        });
-    }
-
-    findDropTarget(e) {
-        return e.target.closest('.file-item');
     }
 
     async loadCurrentDirectory() {
@@ -1004,33 +1062,6 @@ class FileBrowser {
             .map(escapeRegex)
             .join('.*');
         return new RegExp(`^${converted}$`, 'i');
-    }
-
-    updateColumnsCount() {
-        const browser = document.getElementById('file-browser');
-        if (this.viewMode === 'grid') {
-            // Calculate columns based on visible rows
-            const containerHeight = browser.clientHeight;
-            const items = browser.querySelectorAll('.file-item');
-            if (items.length > 0) {
-                const itemHeight = items[0].offsetHeight;
-                const rowsPerColumn = Math.floor(containerHeight / itemHeight);
-                this.columnsCount = rowsPerColumn;
-            }
-        } else {
-            this.columnsCount = 1;
-        }
-    }
-
-    saveSettings() {
-        const settings = {
-            sortField: this.sortField,
-            sortDirection: this.sortDirection,
-            viewMode: this.viewMode,
-            theme: this.theme,
-            lastDirectory: this.currentPath
-        };
-        localStorage.setItem('fileBrowserSettings', JSON.stringify(settings));
     }
 
     async showDeleteConfirmation() {
