@@ -1,0 +1,469 @@
+:root {
+    /* Light theme */
+    --primary-color: #2196f3;
+    --hover-color: #e3f2fd;
+    --selected-color: #bbdefb;
+    --border-color: #e0e0e0;
+    --text-color: #333;
+    --text-secondary: #666;
+    --bg-color: #ffffff;
+    --bg-secondary: #f5f5f5;
+    --header-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+:root[data-theme="dark"] {
+    /* Dark theme */
+    --primary-color: #64b5f6;
+    --hover-color: #1e3a5f;
+    --selected-color: #1e88e5;
+    --border-color: #424242;
+    --text-color: #e0e0e0;
+    --text-secondary: #9e9e9e;
+    --bg-color: #1e1e1e;
+    --bg-secondary: #2d2d2d;
+    --header-shadow: 0 2px 4px rgba(0,0,0,0.3);
+}
+
+body {
+    font-family: system-ui, -apple-system, sans-serif;
+    margin: 0;
+    padding: 0;
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    height: 100vh;
+    overflow: hidden;
+}
+
+#app {
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+#app.grid-mode {
+    max-width: none;
+    margin: 0;
+    padding: 0 20px;
+}
+
+#toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: nowrap;
+    min-height: 48px;
+}
+
+.view-toggle {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.view-toggle button {
+    padding: 4px 8px;
+    background: transparent;
+    border: 1px solid var(--border-color);
+    cursor: pointer;
+}
+
+.view-toggle button.active {
+    background: var(--primary-color);
+    color: white;
+}
+
+#path-bar {
+    display: flex;
+    align-items: center;
+    padding: 8px 12px;
+    background: var(--bg-secondary);
+    border-radius: 4px;
+    margin-bottom: 1rem;
+    overflow-x: auto;
+    font-family: monospace;
+    white-space: nowrap;
+}
+
+.current-path {
+    color: var(--text-color);
+    font-size: 14px;
+}
+
+.parent-dir {
+    opacity: 0.7;
+}
+
+.parent-dir:hover {
+    opacity: 1;
+}
+
+.path-item {
+    cursor: pointer;
+    padding: 2px 4px;
+    border-radius: 2px;
+}
+
+.path-item:hover {
+    background: var(--hover-color);
+}
+
+.path-separator {
+    margin: 0 4px;
+    color: var(--text-secondary);
+}
+
+/* List View */
+.list-view .file-item {
+    display: grid;
+    grid-template-columns: auto 1fr auto auto;
+    gap: 1rem;
+    padding: 8px;
+    border-bottom: 1px solid var(--border-color);
+    cursor: default;
+}
+
+/* Replace Grid View with Multi-Column View */
+.grid-view {
+    display: grid;
+    grid-auto-flow: column;
+    grid-template-rows: repeat(auto-fill, minmax(32px, auto));
+    gap: 8px;
+    padding: 1rem;
+    overflow-x: auto;
+    overflow-y: hidden;
+    height: 100%;
+    align-content: start;
+    min-width: max-content;
+    background: var(--bg-secondary);
+}
+
+.grid-view .file-item {
+    display: grid;
+    grid-template-columns: auto minmax(200px, 1fr) auto auto;
+    gap: 1rem;
+    padding: 8px 16px;
+    background: white;
+    border-radius: 4px;
+    min-width: 400px;
+    white-space: nowrap;
+}
+
+/* Remove old grid-specific styles */
+.grid-view .file-item .icon,
+.grid-view .file-item .name,
+.grid-view .file-item .size,
+.grid-view .file-item .modified {
+    /* Reset any grid-specific styles */
+    text-align: left;
+}
+
+/* Common file item styles */
+.file-item {
+    position: relative;
+    user-select: none;
+    background: var(--bg-color);
+    border-color: var(--border-color);
+}
+
+.file-item:hover {
+    background: var(--hover-color);
+}
+
+.file-item.selected {
+    background: var(--selected-color);
+    color: var(--bg-color);
+}
+
+.file-item.cursor {
+    outline: 2px solid var(--primary-color);
+}
+
+.file-item .icon {
+    font-size: 1.5rem;
+    margin-right: 0.5rem;
+}
+
+.file-item .name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.file-item .size,
+.file-item .modified {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+}
+
+/* Upload progress */
+#upload-progress {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    width: 300px;
+    background: white;
+    border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    padding: 1rem;
+}
+
+.progress-bar {
+    height: 4px;
+    background: #eee;
+    border-radius: 2px;
+    overflow: hidden;
+    margin: 8px 0;
+}
+
+.progress {
+    height: 100%;
+    background: var(--primary-color);
+    width: 0;
+    transition: width 0.3s ease;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+    .list-view .file-item {
+        grid-template-columns: auto 1fr auto;
+    }
+    
+    .modified {
+        display: none;
+    }
+}
+
+.hidden {
+    display: none;
+}
+
+#actions {
+    margin-top: 10px;
+}
+
+button {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 4px;
+    background: #2196f3;
+    color: white;
+    cursor: pointer;
+}
+
+button:disabled {
+    background: #ccc;
+    cursor: not-allowed;
+}
+
+.sort-controls {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.sort-control {
+    position: relative;
+    padding-right: 20px;
+}
+
+.sort-control::after {
+    content: "⇅";
+    position: absolute;
+    right: 4px;
+    opacity: 0.3;
+}
+
+.sort-control.sort-asc::after {
+    content: "↑";
+    opacity: 1;
+}
+
+.sort-control.sort-desc::after {
+    content: "↓";
+    opacity: 1;
+}
+
+/* Update list view to show date column */
+.list-view .file-item {
+    grid-template-columns: auto 1fr auto auto;
+    gap: 1rem;
+}
+
+/* Add to existing CSS */
+.glob-dialog {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: white;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    z-index: 1000;
+}
+
+.glob-dialog input {
+    width: 100%;
+    padding: 8px;
+    margin: 10px 0;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+}
+
+/* Adjust the toolbar and path bar in grid mode */
+.grid-mode #toolbar,
+.grid-mode #path-bar {
+    max-width: 1200px;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+/* Add fixed header styles */
+.header-container {
+    position: sticky;
+    top: 0;
+    background: var(--bg-color);
+    z-index: 100;
+    padding: 20px 20px 0;
+    box-shadow: var(--header-shadow);
+    flex-shrink: 0;
+}
+
+.header-container > div {
+    max-width: 1200px;
+    margin: 0 auto;
+    width: 100%;
+}
+
+#app.grid-mode .header-container > div {
+    max-width: none;
+    padding: 0 20px;
+}
+
+#toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: nowrap;
+    min-height: 48px;
+}
+
+.actions {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    white-space: nowrap;
+}
+
+/* Ensure toolbar items don't wrap unnecessarily */
+.view-toggle,
+.sort-controls,
+.upload-controls {
+    display: flex;
+    gap: 0.5rem;
+    flex-shrink: 0;
+}
+
+/* Responsive adjustments */
+@media (max-width: 1024px) {
+    #toolbar {
+        flex-wrap: wrap;
+    }
+    
+    .upload-controls {
+        order: 1;
+        width: 100%;
+        justify-content: flex-start;
+    }
+}
+
+/* Add upload button styles */
+.upload-controls {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.upload-controls input[type="file"] {
+    display: none;
+}
+
+.upload-controls label {
+    padding: 8px 16px;
+    background: var(--primary-color);
+    color: white;
+    border-radius: 4px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.upload-controls label:hover {
+    background: #1976d2;
+}
+
+/* Update download button to match upload style */
+#download-btn {
+    padding: 8px 16px;
+    background: var(--primary-color);
+    color: white;
+    border-radius: 4px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+#download-btn::before {
+    content: "📥";
+}
+
+#download-btn:hover {
+    background: #1976d2;
+}
+
+#download-btn:disabled {
+    background: #ccc;
+    opacity: 0.7;
+}
+
+/* List view scrolling */
+.list-view {
+    height: 100%;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+.list-view .file-item {
+    display: grid;
+    grid-template-columns: auto minmax(200px, 1fr) auto auto;
+    gap: 1rem;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--border-color);
+    cursor: default;
+}
+
+/* Theme toggle button */
+.theme-toggle {
+    padding: 8px;
+    border-radius: 50%;
+    background: transparent;
+    border: 1px solid var(--border-color);
+    cursor: pointer;
+    font-size: 1.2rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background-color 0.3s;
+}
+
+.theme-toggle:hover {
+    background: var(--hover-color);
+}
+
+#file-browser {
+    flex: 1;
+    overflow: auto;
+    padding: 20px;
+    margin-top: 0;
+} 

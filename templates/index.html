@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>EZDrop - File Browser</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div id="app">
+        <div class="header-container">
+            <div id="toolbar">
+                <div class="view-toggle">
+                    <button data-view="list" class="active">List</button>
+                    <button data-view="grid">Grid</button>
+                </div>
+                <div class="sort-controls">
+                    <button class="sort-control" data-sort="name">Name</button>
+                    <button class="sort-control" data-sort="size">Size</button>
+                    <button class="sort-control" data-sort="date">Date</button>
+                </div>
+                <div class="upload-controls">
+                    <input type="file" id="file-upload" multiple>
+                    <label for="file-upload">📤 Upload Files</label>
+                    <input type="file" id="dir-upload" webkitdirectory directory multiple>
+                    <label for="dir-upload">📁 Upload Directory</label>
+                </div>
+                <div class="actions">
+                    <button id="download-btn" disabled>Download Selected</button>
+                    <button class="theme-toggle" title="Toggle dark mode">🌓</button>
+                </div>
+            </div>
+            <div id="path-bar"></div>
+        </div>
+        <div id="file-browser" class="list-view"></div>
+        <div id="upload-progress" class="hidden">
+            <div class="progress-bar">
+                <div class="progress"></div>
+            </div>
+            <div class="progress-text"></div>
+        </div>
+    </div>
+    <script src="/static/js/main.js"></script>
+</body>
+</html> 
