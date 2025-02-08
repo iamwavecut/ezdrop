@@ -43,6 +43,19 @@ class FileBrowser {
             this.updateColumnsCount();
         });
         this.resizeObserver.observe(document.getElementById('file-browser'));
+
+        // Initialize CRC32 table
+        this.crc32Table = (() => {
+            const table = new Uint32Array(256);
+            for (let i = 0; i < 256; i++) {
+                let c = i;
+                for (let j = 0; j < 8; j++) {
+                    c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+                }
+                table[i] = c;
+            }
+            return table;
+        })();
     }
 
     setupEventListeners() {
@@ -633,6 +646,23 @@ class FileBrowser {
         document.getElementById('download-btn').disabled = this.selectedFiles.size === 0;
     }
 
+    async calculateCRC32(blob) {
+        const CHUNK_SIZE = 64 * 1024; // Read in 64KB chunks for memory efficiency
+        let crc = 0xFFFFFFFF;
+        
+        for (let offset = 0; offset < blob.size; offset += CHUNK_SIZE) {
+            const chunk = blob.slice(offset, Math.min(offset + CHUNK_SIZE, blob.size));
+            const buffer = await chunk.arrayBuffer();
+            const bytes = new Uint8Array(buffer);
+            
+            for (let i = 0; i < bytes.length; i++) {
+                crc = (crc >>> 8) ^ this.crc32Table[(crc ^ bytes[i]) & 0xFF];
+            }
+        }
+        
+        return (crc ^ 0xFFFFFFFF) >>> 0;
+    }
+
     async handleFileDrop(files, targetPath) {
         const CHUNK_SIZE = 1024 * 1024; // 1MB chunks
         const MAX_RETRIES = 3;
@@ -650,6 +680,10 @@ class FileBrowser {
         try {
             // Process each file
             for (const file of files) {
+                // Calculate file checksum first
+                progressText.textContent = `Calculating checksum for ${file.name}...`;
+                const fileChecksum = await this.calculateCRC32(file);
+                
                 const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
                 const chunks = [];
 
@@ -657,10 +691,14 @@ class FileBrowser {
                 for (let i = 0; i < totalChunks; i++) {
                     const start = i * CHUNK_SIZE;
                     const end = Math.min(start + CHUNK_SIZE, file.size);
+                    const chunkBlob = file.slice(start, end);
+                    const chunkChecksum = await this.calculateCRC32(chunkBlob);
+                    
                     chunks.push({
                         index: i,
-                        data: file.slice(start, end),
-                        size: end - start
+                        data: chunkBlob,
+                        size: end - start,
+                        checksum: chunkChecksum
                     });
                 }
 
@@ -679,9 +717,11 @@ class FileBrowser {
                                 chunkIndex: chunk.index,
                                 totalChunks: totalChunks,
                                 chunkSize: chunk.size,
-                                totalSize: file.size
+                                totalSize: file.size,
+                                chunkChecksum: chunk.checksum,
+                                fileChecksum: fileChecksum
                             }));
-                            formData.append('chunkData', new Blob([chunk.data]), 'chunk');
+                            formData.append('chunkData', chunk.data, 'chunk');
 
                             const response = await fetch(`/api/upload/chunk?dir=${encodeURIComponent(targetPath)}`, {
                                 method: 'POST',
@@ -689,7 +729,8 @@ class FileBrowser {
                             });
 
                             if (!response.ok) {
-                                throw new Error(`Upload failed: ${response.statusText}`);
+                                const error = await response.text();
+                                throw new Error(error || `Upload failed: ${response.statusText}`);
                             }
 
                             completedChunks++;

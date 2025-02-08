@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"log"
 	"os"
@@ -40,11 +41,13 @@ type FileInfo struct {
 }
 
 type ChunkInfo struct {
-	FileName    string `json:"fileName"`
-	ChunkIndex  int    `json:"chunkIndex"`
-	TotalChunks int    `json:"totalChunks"`
-	ChunkSize   int64  `json:"chunkSize"`
-	TotalSize   int64  `json:"totalSize"`
+	FileName      string `json:"fileName"`
+	ChunkIndex    int    `json:"chunkIndex"`
+	TotalChunks   int    `json:"totalChunks"`
+	ChunkSize     int64  `json:"chunkSize"`
+	TotalSize     int64  `json:"totalSize"`
+	ChunkChecksum uint32 `json:"chunkChecksum"`
+	FileChecksum  uint32 `json:"fileChecksum"`
 }
 
 func main() {
@@ -404,10 +407,10 @@ func handleChunkUpload(baseDir string) http.HandlerFunc {
 		activeUploadsMu.Lock()
 		upload, exists := activeUploads[uploadID]
 		if !exists {
-			upload = NewChunkedUpload(chunkInfo.FileName, targetDir, chunkInfo.TotalChunks, chunkInfo.TotalSize)
+			upload = NewChunkedUpload(chunkInfo.FileName, targetDir, chunkInfo.TotalChunks, chunkInfo.TotalSize, chunkInfo.FileChecksum)
 			activeUploads[uploadID] = upload
-			log.Printf("Started new chunked upload: %s (%d chunks, %d bytes)",
-				chunkInfo.FileName, chunkInfo.TotalChunks, chunkInfo.TotalSize)
+			log.Printf("Started new chunked upload: %s (%d chunks, %d bytes, checksum: %d)",
+				chunkInfo.FileName, chunkInfo.TotalChunks, chunkInfo.TotalSize, chunkInfo.FileChecksum)
 		}
 		activeUploadsMu.Unlock()
 
@@ -418,7 +421,7 @@ func handleChunkUpload(baseDir string) http.HandlerFunc {
 			return
 		}
 
-		if err := upload.WriteChunk(chunkInfo.ChunkIndex, chunk); err != nil {
+		if err := upload.WriteChunk(chunkInfo.ChunkIndex, chunk, chunkInfo.ChunkChecksum); err != nil {
 			http.Error(w, fmt.Sprintf("Error writing chunk: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -432,7 +435,7 @@ func handleChunkUpload(baseDir string) http.HandlerFunc {
 			activeUploadsMu.Lock()
 			delete(activeUploads, uploadID)
 			activeUploadsMu.Unlock()
-			log.Printf("Completed chunked upload: %s", chunkInfo.FileName)
+			log.Printf("Completed chunked upload: %s (checksum validated)", chunkInfo.FileName)
 		}
 
 		w.WriteHeader(http.StatusOK)
@@ -445,13 +448,14 @@ type ChunkedUpload struct {
 	TotalChunks  int
 	TotalSize    int64
 	ReceivedSize int64
+	FileChecksum uint32
 	Chunks       map[int][]byte
 	TempDir      string
 	LastActivity time.Time
 	mu           sync.Mutex
 }
 
-func NewChunkedUpload(fileName, targetDir string, totalChunks int, totalSize int64) *ChunkedUpload {
+func NewChunkedUpload(fileName, targetDir string, totalChunks int, totalSize int64, fileChecksum uint32) *ChunkedUpload {
 	tempDir, err := os.MkdirTemp("", "upload_*")
 	if err != nil {
 		log.Printf("Error creating temp directory: %v", err)
@@ -463,15 +467,26 @@ func NewChunkedUpload(fileName, targetDir string, totalChunks int, totalSize int
 		TargetPath:   filepath.Join(targetDir, fileName),
 		TotalChunks:  totalChunks,
 		TotalSize:    totalSize,
+		FileChecksum: fileChecksum,
 		Chunks:       make(map[int][]byte),
 		TempDir:      tempDir,
 		LastActivity: time.Now(),
 	}
 }
 
-func (u *ChunkedUpload) WriteChunk(index int, data []byte) error {
+func calculateCRC32(data []byte) uint32 {
+	return crc32.ChecksumIEEE(data)
+}
+
+func (u *ChunkedUpload) WriteChunk(index int, data []byte, expectedChecksum uint32) error {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
+	// Verify chunk checksum
+	actualChecksum := calculateCRC32(data)
+	if actualChecksum != expectedChecksum {
+		return fmt.Errorf("chunk checksum mismatch: expected %d, got %d", expectedChecksum, actualChecksum)
+	}
 
 	chunkPath := filepath.Join(u.TempDir, fmt.Sprintf("chunk_%d", index))
 	if err := os.WriteFile(chunkPath, data, 0o644); err != nil {
@@ -500,6 +515,9 @@ func (u *ChunkedUpload) Finalize() error {
 	}
 	defer dst.Close()
 
+	hash := crc32.NewIEEE()
+	writer := io.MultiWriter(dst, hash)
+
 	// Combine chunks in order
 	for i := 0; i < u.TotalChunks; i++ {
 		chunkPath := filepath.Join(u.TempDir, fmt.Sprintf("chunk_%d", i))
@@ -507,9 +525,17 @@ func (u *ChunkedUpload) Finalize() error {
 		if err != nil {
 			return err
 		}
-		if _, err := dst.Write(data); err != nil {
+		if _, err := writer.Write(data); err != nil {
 			return err
 		}
+	}
+
+	// Verify final file checksum
+	finalChecksum := hash.Sum32()
+	if finalChecksum != u.FileChecksum {
+		// Remove the incomplete/invalid file
+		os.Remove(u.TargetPath)
+		return fmt.Errorf("file checksum mismatch: expected %d, got %d", u.FileChecksum, finalChecksum)
 	}
 
 	// Cleanup temp files
