@@ -94,6 +94,7 @@ func main() {
 	http.HandleFunc("/api/upload", SecurityMiddleware(securityConfig, handleUpload(baseDir)))
 	http.HandleFunc("/api/download", SecurityMiddleware(securityConfig, handleDownload(baseDir)))
 	http.HandleFunc("/api/upload/chunk", SecurityMiddleware(securityConfig, handleChunkUpload(baseDir)))
+	http.HandleFunc("/api/delete", SecurityMiddleware(securityConfig, handleDelete(baseDir)))
 
 	log.Printf("Starting server on :%s serving directory %s (read-only: %v)", *port, baseDir, *readOnly)
 	if err := http.ListenAndServe(":"+*port, nil); err != nil {
@@ -544,4 +545,76 @@ func (u *ChunkedUpload) Finalize() error {
 
 func (u *ChunkedUpload) Cleanup() error {
 	return os.RemoveAll(u.TempDir)
+}
+
+type DeleteRequest struct {
+	Paths []string `json:"paths"`
+}
+
+func handleDelete(baseDir string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var req DeleteRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		if len(req.Paths) == 0 {
+			http.Error(w, "No paths specified", http.StatusBadRequest)
+			return
+		}
+
+		errors := make([]string, 0)
+		deletedCount := 0
+
+		for _, path := range req.Paths {
+			fullPath := filepath.Join(baseDir, path)
+
+			// Security check: ensure path is within base directory
+			if !strings.HasPrefix(fullPath, baseDir) {
+				errors = append(errors, fmt.Sprintf("Invalid path: %s", path))
+				continue
+			}
+
+			// Get file info before deletion
+			info, err := os.Stat(fullPath)
+			if err != nil {
+				errors = append(errors, fmt.Sprintf("Error accessing %s: %v", path, err))
+				continue
+			}
+
+			// Delete the file or directory
+			if info.IsDir() {
+				if err := os.RemoveAll(fullPath); err != nil {
+					errors = append(errors, fmt.Sprintf("Error deleting directory %s: %v", path, err))
+					continue
+				}
+				log.Printf("Deleted directory: %s", path)
+			} else {
+				if err := os.Remove(fullPath); err != nil {
+					errors = append(errors, fmt.Sprintf("Error deleting file %s: %v", path, err))
+					continue
+				}
+				log.Printf("Deleted file: %s", path)
+			}
+			deletedCount++
+		}
+
+		// Prepare response
+		response := map[string]interface{}{
+			"success": len(errors) == 0,
+			"deleted": deletedCount,
+		}
+		if len(errors) > 0 {
+			response["errors"] = errors
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+	}
 }

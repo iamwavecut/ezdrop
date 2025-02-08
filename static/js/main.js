@@ -45,7 +45,12 @@ class FileBrowser {
         this.resizeObserver.observe(document.getElementById('file-browser'));
 
         // Initialize worker pool for CRC32 calculation
-        this.workerPool = new Array(navigator.hardwareConcurrency || 4).fill(null).map(() => {
+        this.initWorkerPool();
+    }
+
+    initWorkerPool() {
+        const workerCount = navigator.hardwareConcurrency || 4;
+        this.workerPool = new Array(workerCount).fill(null).map(() => {
             const worker = new Worker(URL.createObjectURL(new Blob([`
                 const crc32Table = new Uint32Array(256);
                 for (let i = 0; i < 256; i++) {
@@ -58,6 +63,89 @@ class FileBrowser {
 
                 self.onmessage = async function(e) {
                     const { id, chunk } = e.data;
+                    try {
+                        let crc = 0xFFFFFFFF;
+                        const bytes = new Uint8Array(await chunk.arrayBuffer());
+                        
+                        for (let i = 0; i < bytes.length; i++) {
+                            crc = (crc >>> 8) ^ crc32Table[(crc ^ bytes[i]) & 0xFF];
+                        }
+                        
+                        self.postMessage({ id, checksum: (crc ^ 0xFFFFFFFF) >>> 0, error: null });
+                    } catch (error) {
+                        self.postMessage({ id, checksum: null, error: error.message });
+                    }
+                };
+            `], { type: 'text/javascript' })));
+
+            worker.busy = false;
+            worker.errorCount = 0;
+            worker.lastError = null;
+            return worker;
+        });
+
+        this.workerPromises = new Map();
+        this.nextWorkerId = 0;
+
+        // Setup worker message handling
+        this.workerPool.forEach(worker => {
+            worker.onmessage = (e) => {
+                const { id, checksum, error } = e.data;
+                const resolve = this.workerPromises.get(id);
+                if (resolve) {
+                    if (error) {
+                        worker.errorCount++;
+                        worker.lastError = error;
+                        resolve({ error });
+                    } else {
+                        worker.errorCount = 0;
+                        worker.lastError = null;
+                        resolve({ checksum });
+                    }
+                    this.workerPromises.delete(id);
+                }
+                worker.busy = false;
+            };
+
+            worker.onerror = (error) => {
+                worker.errorCount++;
+                worker.lastError = error.message;
+                worker.busy = false;
+                // Recreate worker if it has too many errors
+                if (worker.errorCount > 5) {
+                    this.recreateWorker(worker);
+                }
+            };
+        });
+
+        // Setup cleanup interval
+        this.cleanupInterval = setInterval(() => {
+            this.cleanupWorkerPromises();
+        }, 60000); // Cleanup every minute
+    }
+
+    recreateWorker(oldWorker) {
+        const index = this.workerPool.indexOf(oldWorker);
+        if (index === -1) return;
+
+        oldWorker.terminate();
+        this.initWorker(index);
+    }
+
+    initWorker(index) {
+        const worker = new Worker(URL.createObjectURL(new Blob([`
+            const crc32Table = new Uint32Array(256);
+            for (let i = 0; i < 256; i++) {
+                let c = i;
+                for (let j = 0; j < 8; j++) {
+                    c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+                }
+                crc32Table[i] = c;
+            }
+
+            self.onmessage = async function(e) {
+                const { id, chunk } = e.data;
+                try {
                     let crc = 0xFFFFFFFF;
                     const bytes = new Uint8Array(await chunk.arrayBuffer());
                     
@@ -65,28 +153,76 @@ class FileBrowser {
                         crc = (crc >>> 8) ^ crc32Table[(crc ^ bytes[i]) & 0xFF];
                     }
                     
-                    self.postMessage({ id, checksum: (crc ^ 0xFFFFFFFF) >>> 0 });
-                };
-            `], { type: 'text/javascript' })));
-
-            worker.busy = false;
-            return worker;
-        });
-
-        this.workerPromises = new Map();
-        this.nextWorkerId = 0;
-
-        this.workerPool.forEach(worker => {
-            worker.onmessage = (e) => {
-                const { id, checksum } = e.data;
-                const resolve = this.workerPromises.get(id);
-                if (resolve) {
-                    resolve(checksum);
-                    this.workerPromises.delete(id);
+                    self.postMessage({ id, checksum: (crc ^ 0xFFFFFFFF) >>> 0, error: null });
+                } catch (error) {
+                    self.postMessage({ id, checksum: null, error: error.message });
                 }
-                worker.busy = false;
             };
-        });
+        `], { type: 'text/javascript' })));
+
+        worker.busy = false;
+        worker.errorCount = 0;
+        worker.lastError = null;
+        
+        worker.onmessage = (e) => {
+            const { id, checksum, error } = e.data;
+            const resolve = this.workerPromises.get(id);
+            if (resolve) {
+                if (error) {
+                    worker.errorCount++;
+                    worker.lastError = error;
+                    resolve({ error });
+                } else {
+                    worker.errorCount = 0;
+                    worker.lastError = null;
+                    resolve({ checksum });
+                }
+                this.workerPromises.delete(id);
+            }
+            worker.busy = false;
+        };
+
+        worker.onerror = (error) => {
+            worker.errorCount++;
+            worker.lastError = error.message;
+            worker.busy = false;
+            if (worker.errorCount > 5) {
+                this.recreateWorker(worker);
+            }
+        };
+
+        this.workerPool[index] = worker;
+    }
+
+    cleanupWorkerPromises() {
+        const now = Date.now();
+        for (const [id, promise] of this.workerPromises.entries()) {
+            if (now - promise.timestamp > 30000) { // 30 seconds timeout
+                promise.reject(new Error('Worker timeout'));
+                this.workerPromises.delete(id);
+            }
+        }
+    }
+
+    cleanup() {
+        // Cleanup all resources
+        if (this.cleanupInterval) {
+            clearInterval(this.cleanupInterval);
+        }
+        
+        if (this.resizeObserver) {
+            this.resizeObserver.disconnect();
+        }
+        
+        if (this.workerPool) {
+            this.workerPool.forEach(worker => {
+                if (worker) {
+                    worker.terminate();
+                }
+            });
+        }
+        
+        this.workerPromises.clear();
     }
 
     setupEventListeners() {
@@ -194,11 +330,19 @@ class FileBrowser {
             document.documentElement.dataset.theme = this.theme;
             this.saveSettings();
         });
+
+        // Delete button
+        const deleteBtn = document.getElementById('delete-btn');
+        deleteBtn.addEventListener('click', () => {
+            if (this.selectedFiles.size > 0) {
+                this.showDeleteConfirmation();
+            }
+        });
     }
 
     handleMouseDown(e) {
         const item = e.target.closest('.file-item');
-        if (!item) return;
+        if (!item || item.classList.contains('parent-dir')) return;
 
         const index = Array.from(item.parentElement.children).indexOf(item);
         
@@ -212,6 +356,7 @@ class FileBrowser {
             this.isDragging = true;
             this.dragStartIndex = index;
         }
+        this.updateDownloadButtonState();
     }
 
     handleMouseMove(e) {
@@ -456,6 +601,7 @@ class FileBrowser {
             items[index].classList.add('cursor');
             this.cursorIndex = index;
             this.lastSelectedIndex = index;
+            this.updateDownloadButtonState();
         }
     }
 
@@ -470,9 +616,13 @@ class FileBrowser {
     }
 
     addToSelection(item) {
+        if (item.classList.contains('parent-dir')) {
+            return; // Don't allow selecting parent directory
+        }
         item.classList.add('selected');
         this.selectedFiles.add(item.dataset.path);
         document.getElementById('download-btn').disabled = this.selectedFiles.size === 0;
+        this.updateSelectionSummary();
     }
 
     clearSelection() {
@@ -480,7 +630,75 @@ class FileBrowser {
             el.classList.remove('selected');
         });
         this.selectedFiles.clear();
-        document.getElementById('download-btn').disabled = true;
+        this.updateDownloadButtonState();
+        this.updateSelectionSummary();
+    }
+
+    updateDownloadButtonState() {
+        const downloadBtn = document.getElementById('download-btn');
+        const deleteBtn = document.getElementById('delete-btn');
+        const cursorItem = document.querySelector('.file-item.cursor');
+        
+        // Enable download if there are selected files or if cursor is on a file (not parent dir)
+        const hasSelection = this.selectedFiles.size > 0;
+        const hasValidCursor = cursorItem && !cursorItem.classList.contains('parent-dir');
+        
+        downloadBtn.disabled = !hasSelection && !hasValidCursor;
+        deleteBtn.disabled = !hasSelection; // Only enable delete for explicit selection
+    }
+
+    updateSelectionSummary() {
+        const summary = document.getElementById('selection-summary');
+        if (this.selectedFiles.size === 0) {
+            summary.classList.remove('visible');
+            return;
+        }
+
+        const items = document.querySelectorAll('.file-item.selected');
+        let totalSize = 0;
+        let fileCount = 0;
+        let dirCount = 0;
+
+        items.forEach(item => {
+            if (item.dataset.isDir === 'true') {
+                dirCount++;
+            } else {
+                fileCount++;
+                const sizeText = item.querySelector('.size').textContent;
+                const size = this.parseSize(sizeText);
+                if (!isNaN(size)) {
+                    totalSize += size;
+                }
+            }
+        });
+
+        let text = '';
+        if (fileCount > 0) {
+            text += `${fileCount} file${fileCount !== 1 ? 's' : ''} (${this.formatSize(totalSize)})`;
+        }
+        if (dirCount > 0) {
+            if (text) text += ', ';
+            text += `${dirCount} folder${dirCount !== 1 ? 's' : ''}`;
+        }
+
+        summary.textContent = `Selected: ${text}`;
+        summary.classList.add('visible');
+    }
+
+    parseSize(sizeText) {
+        const units = {
+            'B': 1,
+            'KB': 1024,
+            'MB': 1024 * 1024,
+            'GB': 1024 * 1024 * 1024,
+            'TB': 1024 * 1024 * 1024 * 1024
+        };
+        
+        const match = sizeText.match(/^([\d.]+)\s*([KMGT]?B)$/);
+        if (!match) return NaN;
+        
+        const [, size, unit] = match;
+        return parseFloat(size) * (units[unit] || 1);
     }
 
     scrollIntoView(element) {
@@ -681,11 +899,19 @@ class FileBrowser {
             throw new Error('Worker pool initialization failed');
         }
 
-        const worker = this.workerPool.find(w => w && !w.busy);
+        // Find available worker or wait for one
+        let worker;
+        let attempts = 0;
+        while (!worker && attempts < 50) { // Maximum 5 seconds wait
+            worker = this.workerPool.find(w => w && !w.busy);
+            if (!worker) {
+                await new Promise(resolve => setTimeout(resolve, 100));
+                attempts++;
+            }
+        }
+
         if (!worker) {
-            // If all workers are busy, wait for the next available one
-            await new Promise(resolve => setTimeout(resolve, 10));
-            return this.calculateCRC32(blob);
+            throw new Error('No workers available after timeout');
         }
 
         worker.busy = true;
@@ -693,7 +919,17 @@ class FileBrowser {
         
         return new Promise((resolve, reject) => {
             try {
-                this.workerPromises.set(id, resolve);
+                this.workerPromises.set(id, {
+                    resolve: (result) => {
+                        if (result.error) {
+                            reject(new Error(result.error));
+                        } else {
+                            resolve(result.checksum);
+                        }
+                    },
+                    reject,
+                    timestamp: Date.now()
+                });
                 worker.postMessage({ id, chunk: blob });
             } catch (error) {
                 worker.busy = false;
@@ -709,18 +945,28 @@ class FileBrowser {
             return;
         }
 
-        const CHUNK_SIZE = 1024 * 1024; // 1MB chunks
         const MAX_RETRIES = 3;
         const MAX_PARALLEL_UPLOADS = 3;
         const RETRY_DELAY = 1000; // 1 second
+        const PROGRESS_UPDATE_INTERVAL = 100; // Update progress every 100ms
+
+        // Calculate optimal chunk size based on file size
+        const getOptimalChunkSize = (fileSize) => {
+            if (fileSize <= 1024 * 1024) { // <= 1MB
+                return 256 * 1024; // 256KB chunks
+            } else if (fileSize <= 100 * 1024 * 1024) { // <= 100MB
+                return 1024 * 1024; // 1MB chunks
+            } else if (fileSize <= 1024 * 1024 * 1024) { // <= 1GB
+                return 5 * 1024 * 1024; // 5MB chunks
+            } else {
+                return 10 * 1024 * 1024; // 10MB chunks
+            }
+        };
 
         const progress = document.getElementById('upload-progress');
         progress.classList.remove('hidden');
         const progressBar = progress.querySelector('.progress');
         const progressText = progress.querySelector('.progress-text');
-
-        const totalSize = Array.from(files).reduce((acc, file) => acc + file.size, 0);
-        let uploadedSize = 0;
 
         const showMessage = (text, type = 'info', duration = 3000) => {
             const message = document.createElement('div');
@@ -730,9 +976,56 @@ class FileBrowser {
             setTimeout(() => message.remove(), duration);
         };
 
+        // Validate files before starting upload
+        const validFiles = [];
+        const invalidFiles = [];
+        
+        for (const file of files) {
+            const validation = await this.validateFile(file, MAX_FILE_SIZE, ALLOWED_MIME_TYPES);
+            if (validation.valid) {
+                validFiles.push(file);
+            } else {
+                invalidFiles.push({ file, reason: validation.reason });
+            }
+        }
+
+        // Show validation results
+        if (invalidFiles.length > 0) {
+            const message = invalidFiles.map(({ file, reason }) => 
+                `${file.name}: ${reason}`
+            ).join('\n');
+            showMessage(`Some files were skipped:\n${message}`, 'error', 5000);
+        }
+
+        if (validFiles.length === 0) {
+            progress.classList.add('hidden');
+            return;
+        }
+
+        const totalSize = validFiles.reduce((acc, file) => acc + file.size, 0);
+        let uploadedSize = 0;
+        let lastProgressUpdate = 0;
+
+        // Batch progress updates
+        const updateProgress = (file, completedChunks, totalChunks, chunkSize) => {
+            const now = Date.now();
+            if (now - lastProgressUpdate < PROGRESS_UPDATE_INTERVAL) {
+                return;
+            }
+            lastProgressUpdate = now;
+
+            const fileProgress = (completedChunks / totalChunks) * 100;
+            const totalProgress = ((uploadedSize + (completedChunks * chunkSize)) / totalSize) * 100;
+            
+            progressBar.style.width = `${totalProgress}%`;
+            progressText.textContent = `Uploading ${file.name} (${completedChunks}/${totalChunks} chunks, ${fileProgress.toFixed(1)}%)`;
+        };
+
         try {
-            for (const file of files) {
+            for (const file of validFiles) {
+                const chunkSize = getOptimalChunkSize(file.size);
                 progressText.textContent = `Calculating checksum for ${file.name}...`;
+                
                 let fileChecksum;
                 try {
                     fileChecksum = await this.calculateCRC32(file);
@@ -742,14 +1035,14 @@ class FileBrowser {
                     continue;
                 }
                 
-                const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+                const totalChunks = Math.ceil(file.size / chunkSize);
                 const chunks = [];
 
                 // Prepare chunks with parallel checksum calculation
                 const chunkPromises = [];
                 for (let i = 0; i < totalChunks; i++) {
-                    const start = i * CHUNK_SIZE;
-                    const end = Math.min(start + CHUNK_SIZE, file.size);
+                    const start = i * chunkSize;
+                    const end = Math.min(start + chunkSize, file.size);
                     const chunkBlob = file.slice(start, end);
                     
                     chunkPromises.push((async () => {
@@ -803,12 +1096,7 @@ class FileBrowser {
 
                             completedChunks++;
                             uploadedSize += chunk.size;
-
-                            // Update progress
-                            const fileProgress = (completedChunks / totalChunks) * 100;
-                            const totalProgress = (uploadedSize / totalSize) * 100;
-                            progressBar.style.width = `${totalProgress}%`;
-                            progressText.textContent = `Uploading ${file.name} (${completedChunks}/${totalChunks} chunks, ${fileProgress.toFixed(1)}%)`;
+                            updateProgress(file, completedChunks, totalChunks, chunkSize);
 
                             return;
                         } catch (error) {
@@ -857,7 +1145,7 @@ class FileBrowser {
             // Show success message
             const message = document.createElement('div');
             message.className = 'upload-message success';
-            message.textContent = `Successfully uploaded ${files.length} file(s)`;
+            message.textContent = `Successfully uploaded ${validFiles.length} file(s)`;
             document.body.appendChild(message);
             setTimeout(() => message.remove(), 3000);
 
@@ -881,10 +1169,16 @@ class FileBrowser {
     }
 
     downloadSelected() {
-        const paths = Array.from(this.selectedFiles);
-        const queryString = paths.map(path => `paths=${encodeURIComponent(path)}`).join('&');
-        const forceZip = paths.length > 1 ? '&zip=1' : '';
-        window.location.href = `/api/download?${queryString}${forceZip}`;
+        if (this.selectedFiles.size > 0) {
+            const paths = Array.from(this.selectedFiles);
+            this.downloadFiles(paths);
+        } else {
+            // If no selection but cursor is on a file, download that file
+            const cursorItem = document.querySelector('.file-item.cursor');
+            if (cursorItem && !cursorItem.classList.contains('parent-dir')) {
+                this.downloadFiles([cursorItem.dataset.path]);
+            }
+        }
     }
 
     formatSize(bytes) {
@@ -1058,6 +1352,221 @@ class FileBrowser {
             lastDirectory: this.currentPath
         };
         localStorage.setItem('fileBrowserSettings', JSON.stringify(settings));
+    }
+
+    async showDeleteConfirmation() {
+        const items = document.querySelectorAll('.file-item.selected');
+        let totalSize = 0;
+        let fileCount = 0;
+        let dirCount = 0;
+        const fileList = [];
+
+        items.forEach(item => {
+            const name = item.querySelector('.name').textContent;
+            const isDir = item.dataset.isDir === 'true';
+            fileList.push(`${isDir ? '📁' : '📄'} ${name}`);
+            
+            if (isDir) {
+                dirCount++;
+            } else {
+                fileCount++;
+                const sizeText = item.querySelector('.size').textContent;
+                const size = this.parseSize(sizeText);
+                if (!isNaN(size)) {
+                    totalSize += size;
+                }
+            }
+        });
+
+        const overlay = document.createElement('div');
+        overlay.className = 'dialog-overlay';
+        
+        const dialog = document.createElement('div');
+        dialog.className = 'confirmation-dialog';
+        
+        let message = '<h2>Confirm Deletion</h2>';
+        message += '<div class="content">';
+        message += '<div class="warning">⚠️ This action cannot be undone!</div>';
+        
+        let summary = '';
+        if (fileCount > 0) {
+            summary += `${fileCount} file${fileCount !== 1 ? 's' : ''} (${this.formatSize(totalSize)})`;
+        }
+        if (dirCount > 0) {
+            if (summary) summary += ' and ';
+            summary += `${dirCount} folder${dirCount !== 1 ? 's' : ''}`;
+        }
+        
+        message += `<p>You are about to delete ${summary}:</p>`;
+        message += '<div class="file-list">';
+        message += fileList.join('<br>');
+        message += '</div>';
+        
+        if (dirCount > 0) {
+            message += '<p class="warning">Warning: Folders and their contents will be permanently deleted!</p>';
+        }
+        
+        message += '</div>';
+        message += '<div class="actions">';
+        message += '<button class="cancel">Cancel</button>';
+        message += '<button class="danger confirm">Delete</button>';
+        message += '</div>';
+        
+        dialog.innerHTML = message;
+        
+        document.body.appendChild(overlay);
+        document.body.appendChild(dialog);
+        
+        return new Promise((resolve) => {
+            dialog.querySelector('.cancel').addEventListener('click', () => {
+                overlay.remove();
+                dialog.remove();
+                resolve(false);
+            });
+            
+            dialog.querySelector('.confirm').addEventListener('click', async () => {
+                const paths = Array.from(this.selectedFiles);
+                try {
+                    const response = await fetch('/api/delete', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ paths }),
+                    });
+                    
+                    if (!response.ok) {
+                        throw new Error(await response.text());
+                    }
+                    
+                    this.clearSelection();
+                    await this.loadCurrentDirectory();
+                    
+                    const message = document.createElement('div');
+                    message.className = 'upload-message success';
+                    message.textContent = `Successfully deleted ${summary}`;
+                    document.body.appendChild(message);
+                    setTimeout(() => message.remove(), 3000);
+                } catch (error) {
+                    console.error('Delete error:', error);
+                    const message = document.createElement('div');
+                    message.className = 'upload-message error';
+                    message.textContent = `Error deleting files: ${error.message}`;
+                    document.body.appendChild(message);
+                    setTimeout(() => message.remove(), 3000);
+                } finally {
+                    overlay.remove();
+                    dialog.remove();
+                    resolve(true);
+                }
+            });
+            
+            // Close on overlay click
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) {
+                    overlay.remove();
+                    dialog.remove();
+                    resolve(false);
+                }
+            });
+            
+            // Close on Escape key
+            document.addEventListener('keydown', function handler(e) {
+                if (e.key === 'Escape') {
+                    overlay.remove();
+                    dialog.remove();
+                    document.removeEventListener('keydown', handler);
+                    resolve(false);
+                }
+            });
+        });
+    }
+
+    async validateFile(file, maxSize, allowedTypes) {
+        // Check file size
+        if (file.size > maxSize) {
+            return {
+                valid: false,
+                reason: `File size exceeds maximum allowed size (${this.formatSize(maxSize)})`
+            };
+        }
+
+        // Check MIME type
+        const mimeType = file.type || await this.getMimeType(file);
+        if (!allowedTypes.has(mimeType)) {
+            return {
+                valid: false,
+                reason: `File type not allowed (${mimeType})`
+            };
+        }
+
+        // Additional security checks
+        if (file.name.includes('..') || file.name.startsWith('/')) {
+            return {
+                valid: false,
+                reason: 'Invalid file name'
+            };
+        }
+
+        // Check for executable files
+        if (/\.(exe|dll|bat|cmd|sh|app)$/i.test(file.name)) {
+            return {
+                valid: false,
+                reason: 'Executable files are not allowed'
+            };
+        }
+
+        return { valid: true };
+    }
+
+    async getMimeType(file) {
+        // Read the first few bytes of the file to determine its type
+        const buffer = await file.slice(0, 4100).arrayBuffer();
+        const arr = new Uint8Array(buffer);
+        
+        // Check for common file signatures
+        if (arr[0] === 0xFF && arr[1] === 0xD8 && arr[2] === 0xFF) {
+            return 'image/jpeg';
+        }
+        if (arr[0] === 0x89 && arr[1] === 0x50 && arr[2] === 0x4E && arr[3] === 0x47) {
+            return 'image/png';
+        }
+        if (arr[0] === 0x47 && arr[1] === 0x49 && arr[2] === 0x46) {
+            return 'image/gif';
+        }
+        if (arr[0] === 0x25 && arr[1] === 0x50 && arr[2] === 0x44 && arr[3] === 0x46) {
+            return 'application/pdf';
+        }
+        
+        // Check for ZIP-based formats
+        if (arr[0] === 0x50 && arr[1] === 0x4B && arr[2] === 0x03 && arr[3] === 0x04) {
+            // Check for Office formats
+            if (file.name.endsWith('.docx')) {
+                return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+            }
+            if (file.name.endsWith('.xlsx')) {
+                return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+            }
+            return 'application/zip';
+        }
+
+        // Default to checking the file extension
+        const ext = file.name.split('.').pop()?.toLowerCase();
+        const mimeMap = {
+            'txt': 'text/plain',
+            'html': 'text/html',
+            'css': 'text/css',
+            'js': 'text/javascript',
+            'json': 'application/json',
+            'xml': 'application/xml',
+            'doc': 'application/msword',
+            'xls': 'application/vnd.ms-excel',
+            'mp4': 'video/mp4',
+            'mp3': 'audio/mpeg',
+            'wav': 'audio/wav'
+        };
+
+        return mimeMap[ext] || 'application/octet-stream';
     }
 }
 

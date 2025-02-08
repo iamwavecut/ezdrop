@@ -533,4 +533,93 @@ button:disabled {
     .modified {
         display: none;
     }
+}
+
+.selection-summary {
+    background: var(--bg-secondary);
+    padding: 8px 16px;
+    border-radius: 4px;
+    margin-bottom: 16px;
+    font-size: 14px;
+    color: var(--text-secondary);
+    display: none;
+}
+
+.selection-summary.visible {
+    display: block;
+    animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.danger {
+    background-color: #dc3545 !important;
+    color: white !important;
+}
+
+.danger:hover:not(:disabled) {
+    background-color: #bd2130 !important;
+}
+
+.confirmation-dialog {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: var(--bg-color);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 24px;
+    max-width: 600px;
+    width: 90%;
+    z-index: 1000;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+}
+
+.confirmation-dialog h2 {
+    margin: 0 0 16px 0;
+    color: var(--text-color);
+}
+
+.confirmation-dialog .content {
+    margin-bottom: 24px;
+    max-height: 300px;
+    overflow-y: auto;
+    color: var(--text-color);
+}
+
+.confirmation-dialog .warning {
+    color: #dc3545;
+    font-weight: bold;
+    margin-bottom: 16px;
+}
+
+.confirmation-dialog .file-list {
+    font-family: monospace;
+    margin: 8px 0;
+    padding: 8px;
+    background: var(--bg-secondary);
+    border-radius: 4px;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.confirmation-dialog .actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.dialog-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 999;
+    backdrop-filter: blur(2px);
 } 
