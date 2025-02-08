@@ -673,20 +673,19 @@ class FileBrowser {
                 const uploadChunk = async (chunk) => {
                     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
                         try {
-                            const chunkInfo = {
+                            const formData = new FormData();
+                            formData.append('chunkInfo', JSON.stringify({
                                 fileName: file.name,
                                 chunkIndex: chunk.index,
                                 totalChunks: totalChunks,
                                 chunkSize: chunk.size,
                                 totalSize: file.size
-                            };
+                            }));
+                            formData.append('chunkData', new Blob([chunk.data]), 'chunk');
 
                             const response = await fetch(`/api/upload/chunk?dir=${encodeURIComponent(targetPath)}`, {
                                 method: 'POST',
-                                body: JSON.stringify(chunkInfo),
-                                headers: {
-                                    'Content-Type': 'application/json'
-                                }
+                                body: formData
                             });
 
                             if (!response.ok) {

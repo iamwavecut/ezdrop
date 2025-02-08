@@ -371,12 +371,32 @@ func handleChunkUpload(baseDir string) http.HandlerFunc {
 			return
 		}
 
-		// Parse chunk info
+		// Parse multipart form
+		if err := r.ParseMultipartForm(32 << 20); err != nil {
+			http.Error(w, "Error parsing multipart form", http.StatusBadRequest)
+			return
+		}
+
+		// Get chunk info from form
+		chunkInfoStr := r.FormValue("chunkInfo")
+		if chunkInfoStr == "" {
+			http.Error(w, "Missing chunk info", http.StatusBadRequest)
+			return
+		}
+
 		var chunkInfo ChunkInfo
-		if err := json.NewDecoder(r.Body).Decode(&chunkInfo); err != nil {
+		if err := json.Unmarshal([]byte(chunkInfoStr), &chunkInfo); err != nil {
 			http.Error(w, "Invalid chunk info", http.StatusBadRequest)
 			return
 		}
+
+		// Get chunk data from form
+		chunkFile, _, err := r.FormFile("chunkData")
+		if err != nil {
+			http.Error(w, "Error reading chunk data", http.StatusBadRequest)
+			return
+		}
+		defer chunkFile.Close()
 
 		// Generate upload ID based on filename and total size
 		uploadID := fmt.Sprintf("%s_%d", chunkInfo.FileName, chunkInfo.TotalSize)
@@ -391,11 +411,10 @@ func handleChunkUpload(baseDir string) http.HandlerFunc {
 		}
 		activeUploadsMu.Unlock()
 
-		// Handle chunk data
-		chunk := make([]byte, chunkInfo.ChunkSize)
-		_, err := io.ReadFull(r.Body, chunk)
+		// Read chunk data
+		chunk, err := io.ReadAll(chunkFile)
 		if err != nil {
-			http.Error(w, "Error reading chunk data", http.StatusBadRequest)
+			http.Error(w, "Error reading chunk data", http.StatusInternalServerError)
 			return
 		}
 
