@@ -35,10 +35,23 @@ ezdrop -chroot /home/user/files -readonly
 
 ### File Management
 - File browser with list/grid views
-- Multi-file upload/download
+- Multi-file upload/download with progress tracking
+- Chunked file upload support for large files
 - Directory upload support
 - Sort by name/size/date
 - File selection patterns (glob)
+
+### Upload Features
+- Supports any file type and size
+- Chunked upload with automatic size optimization
+- Checksum verification for data integrity
+- Upload progress tracking:
+  - Overall progress across all files
+  - Per-file progress with chunk information
+  - Visual progress bars
+  - File size and transfer speed display
+- Automatic retry on failed chunks
+- Drag and drop support
 
 ### Navigation
 - Keyboard navigation
@@ -53,7 +66,6 @@ ezdrop -chroot /home/user/files -readonly
 
 ### Interface
 - Dark/light theme toggle
-- Drag and drop support
 - List and grid view modes
 - Responsive design
 - Progress indicators
@@ -71,8 +83,7 @@ ezdrop -chroot /home/user/files -readonly
 ## Security
 
 - [x] Enforced chroot directory
-- [x] File type validation
-- [x] Upload size limits
+- [x] Path traversal protection
 - [x] Rate limiting
 - [x] Security headers
 - [x] Read-only mode
