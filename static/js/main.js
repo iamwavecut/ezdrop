@@ -219,9 +219,32 @@ class FileBrowser {
         };
 
         const progress = document.getElementById('upload-progress');
+        progress.innerHTML = `
+            <div class="progress-container">
+                <div class="progress-info">
+                    <div class="overall-progress">
+                        <div class="progress-label">Overall Progress</div>
+                        <div class="progress-bar">
+                            <div class="progress"></div>
+                        </div>
+                        <div class="progress-text"></div>
+                    </div>
+                    <div class="file-progress">
+                        <div class="progress-label">Current File</div>
+                        <div class="progress-bar">
+                            <div class="progress"></div>
+                        </div>
+                        <div class="progress-text"></div>
+                    </div>
+                </div>
+            </div>
+        `;
         progress.classList.remove('hidden');
-        const progressBar = progress.querySelector('.progress');
-        const progressText = progress.querySelector('.progress-text');
+
+        const overallProgressBar = progress.querySelector('.overall-progress .progress');
+        const overallProgressText = progress.querySelector('.overall-progress .progress-text');
+        const fileProgressBar = progress.querySelector('.file-progress .progress');
+        const fileProgressText = progress.querySelector('.file-progress .progress-text');
 
         const showMessage = (text, type = 'info', duration = 3000) => {
             const message = document.createElement('div');
@@ -260,15 +283,36 @@ class FileBrowser {
         const totalSize = validFiles.reduce((acc, file) => acc + file.size, 0);
         let uploadedSize = 0;
         let lastProgressUpdate = 0;
+        let currentFileIndex = 0;
+
+        const updateProgress = (currentFile, chunkIndex, totalChunks, chunkSize) => {
+            const now = Date.now();
+            if (now - lastProgressUpdate >= PROGRESS_UPDATE_INTERVAL) {
+                // Update file progress
+                const fileProgress = ((chunkIndex + 1) / totalChunks) * 100;
+                fileProgressBar.style.width = `${fileProgress}%`;
+                fileProgressText.textContent = `${currentFile.name} (${chunkIndex + 1}/${totalChunks} chunks, ${fileProgress.toFixed(1)}%)`;
+
+                // Update overall progress
+                const totalProgress = (uploadedSize / totalSize) * 100;
+                overallProgressBar.style.width = `${totalProgress}%`;
+                overallProgressText.textContent = `File ${currentFileIndex + 1}/${validFiles.length} (${totalProgress.toFixed(1)}%, ${this.formatSize(uploadedSize)} / ${this.formatSize(totalSize)})`;
+
+                lastProgressUpdate = now;
+            }
+        };
 
         try {
             for (const file of validFiles) {
                 const chunkSize = getOptimalChunkSize(file.size);
                 const totalChunks = Math.ceil(file.size / chunkSize);
                 let fileCrc = 0xFFFFFFFF;
-                let uploadedChunks = 0;
 
-                progressText.textContent = `Uploading ${file.name} (0/${totalChunks} chunks)...`;
+                // Pre-calculate file checksum
+                const fileBuffer = await file.arrayBuffer();
+                const fileBytes = new Uint8Array(fileBuffer);
+                fileCrc = this.calculateCRC32(fileBytes);
+                const finalFileChecksum = this.finalizeCRC32(fileCrc);
 
                 for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
                     const start = chunkIndex * chunkSize;
@@ -276,9 +320,8 @@ class FileBrowser {
                     const chunk = file.slice(start, end);
                     const chunkBytes = new Uint8Array(await chunk.arrayBuffer());
 
-                    // Calculate CRCs
+                    // Calculate chunk CRC
                     const chunkCrc = this.finalizeCRC32(this.calculateCRC32(chunkBytes));
-                    fileCrc = this.calculateCRC32(chunkBytes, fileCrc);
 
                     // Retry loop for chunk upload
                     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
@@ -291,7 +334,7 @@ class FileBrowser {
                                 chunkSize: end - start,
                                 totalSize: file.size,
                                 chunkChecksum: chunkCrc,
-                                fileChecksum: chunkIndex === totalChunks - 1 ? this.finalizeCRC32(fileCrc) : 0
+                                fileChecksum: finalFileChecksum
                             }));
                             formData.append('chunkData', chunk, 'chunk');
 
@@ -304,18 +347,8 @@ class FileBrowser {
                                 throw new Error(await response.text());
                             }
 
-                            uploadedChunks++;
                             uploadedSize += end - start;
-
-                            // Update progress
-                            const now = Date.now();
-                            if (now - lastProgressUpdate >= PROGRESS_UPDATE_INTERVAL) {
-                                const fileProgress = (uploadedChunks / totalChunks) * 100;
-                                const totalProgress = (uploadedSize / totalSize) * 100;
-                                progressBar.style.width = `${totalProgress}%`;
-                                progressText.textContent = `Uploading ${file.name} (${uploadedChunks}/${totalChunks} chunks, ${fileProgress.toFixed(1)}%)`;
-                                lastProgressUpdate = now;
-                            }
+                            updateProgress(file, chunkIndex, totalChunks, chunkSize);
 
                             break; // Success, exit retry loop
                         } catch (error) {
@@ -327,6 +360,7 @@ class FileBrowser {
                         }
                     }
                 }
+                currentFileIndex++;
             }
 
             showMessage(`Successfully uploaded ${validFiles.length} file(s)`, 'success');
@@ -337,8 +371,7 @@ class FileBrowser {
         } finally {
             setTimeout(() => {
                 progress.classList.add('hidden');
-                progressBar.style.width = '0';
-                progressText.textContent = '';
+                progress.innerHTML = '';
             }, 1000);
         }
     }

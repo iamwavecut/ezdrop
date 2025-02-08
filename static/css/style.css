@@ -224,29 +224,56 @@ body {
     top: 0;
     left: 0;
     right: 0;
-    height: 4px;
-    background: rgba(0, 0, 0, 0.1);
+    background: var(--bg-color);
+    padding: 16px;
+    box-shadow: var(--header-shadow);
     z-index: 1000;
 }
 
-.upload-progress .progress {
+.progress-container {
+    max-width: 800px;
+    margin: 0 auto;
+}
+
+.progress-info {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.overall-progress,
+.file-progress {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.progress-label {
+    font-size: 14px;
+    color: var(--text-secondary);
+}
+
+.progress-bar {
+    height: 8px;
+    background: var(--bg-secondary);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.progress-bar .progress {
     height: 100%;
     background: var(--primary-color);
     width: 0;
-    transition: width 0.3s ease;
+    transition: width 0.2s ease;
 }
 
-.upload-progress .progress-text {
-    position: fixed;
-    top: 8px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: var(--bg-color);
-    padding: 8px 16px;
-    border-radius: 4px;
+.progress-text {
     font-size: 14px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-    z-index: 1001;
+    color: var(--text-color);
+}
+
+.file-progress .progress-bar .progress {
+    background: var(--primary-hover);
 }
 
 .upload-message {
@@ -260,6 +287,7 @@ body {
     z-index: 1000;
     animation: slideIn 0.3s ease;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    white-space: pre-line;
 }
 
 .upload-message.success {
@@ -268,6 +296,10 @@ body {
 
 .upload-message.error {
     background: #f44336;
+}
+
+.upload-message.info {
+    background: var(--primary-color);
 }
 
 @keyframes slideIn {
@@ -282,7 +314,7 @@ body {
 }
 
 .hidden {
-    display: none;
+    display: none !important;
 }
 
 #actions {
