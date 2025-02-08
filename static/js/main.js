@@ -1,3 +1,28 @@
+// Constants for file validation
+const MAX_FILE_SIZE = 32 * 1024 * 1024; // 32MB - matching server config
+const ALLOWED_MIME_TYPES = new Set([
+    'text/plain',
+    'text/html',
+    'text/css',
+    'text/javascript',
+    'application/json',
+    'application/xml',
+    'application/pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'image/jpeg',
+    'image/png',
+    'image/gif',
+    'audio/mpeg',
+    'audio/wav',
+    'video/mp4',
+    'application/zip',
+    'application/x-zip-compressed',
+    'application/octet-stream'
+]);
+
 class FileBrowser {
     constructor() {
         this.currentPath = '';
@@ -1194,6 +1219,11 @@ class FileBrowser {
     }
 
     sortFiles(files) {
+        // Handle null/undefined/empty files array
+        if (!files || !Array.isArray(files)) {
+            return [];
+        }
+
         // Separate directories and files
         const dirs = files.filter(f => f.isDir);
         const regularFiles = files.filter(f => !f.isDir);
