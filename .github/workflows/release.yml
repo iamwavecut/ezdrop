@@ -12,6 +12,7 @@ on:
 
 jobs:
   releases-matrix:
+    permissions: write-all
     name: Release Matrix
     runs-on: ubuntu-latest
     strategy:
@@ -36,6 +37,9 @@ jobs:
         goos: ${{ matrix.goos }}
         goarch: ${{ matrix.goarch }}
         goversion: 1.23
-        build_flags: -v
-        ldflags: "-w -s"
+        ldflags: "-s -w -extldflags -static"
         release_tag: ${{ steps.generate_release_tag.outputs.tag }}
+        pre_command: export CGO_ENABLED=0
+        binary_name: "ezdrop"
+        asset_name: "ezdrop-${{ matrix.goos }}-${{ matrix.goarch }}"
+
