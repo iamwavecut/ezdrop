@@ -39,6 +39,13 @@ jobs:
         with:
           tag_prefix: "v"
 
+      - name: Create Release Tag
+        uses: rickstaa/action-create-tag@v1.7.2
+        with:
+          tag: "${{ steps.semantic_version.outputs.version_tag }}"
+          message: "Release ${{ steps.semantic_version.outputs.version_tag }}"
+          github_token: ${{ secrets.PAT }}
+
       - uses: wangyoucao577/go-release-action@v1.53
         with:
           github_token: ${{ secrets.PAT }}
