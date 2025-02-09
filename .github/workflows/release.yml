@@ -33,7 +33,7 @@ jobs:
 
     - name: Generate release tag
       id: generate_release_tag
-      uses: amitsingh-007/next-release-tag@v6.0.0
+      uses: amitsingh-007/next-release-tag@v6.1.0
       with:
         github_token: ${{ secrets.PAT }}
         tag_prefix: 'v'
@@ -43,7 +43,7 @@ jobs:
       uses: rickstaa/action-create-tag@v1
       with:
         tag: ${{ steps.generate_release_tag.outputs.tag }}
-        message: "Release ${{ steps.generate_release_tag.outputs.tag }}"
+        message: "Release ${{ steps.generate_release_tag.outputs.next_release_tag }}"
         github_token: ${{ secrets.PAT }}
 
     - uses: wangyoucao577/go-release-action@v1.53
@@ -53,8 +53,8 @@ jobs:
         goarch: ${{ matrix.goarch }}
         goversion: 1.23
         ldflags: "-s -w -extldflags -static"
-        release_tag: ${{ steps.generate_release_tag.outputs.tag }}
-        release_name: ${{ steps.generate_release_tag.outputs.tag }}
+        release_tag: ${{ steps.generate_release_tag.outputs.next_release_tag }}
+        release_name: ${{ steps.generate_release_tag.outputs.next_release_tag }}
         pre_command: export CGO_ENABLED=0
         binary_name: "ezdrop"
         asset_name: "ezdrop-${{ matrix.goos }}-${{ matrix.goarch }}"
