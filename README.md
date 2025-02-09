@@ -2,6 +2,10 @@
 
 Simple and fast web-based file browser and transfer tool.
 
+
+https://github.com/user-attachments/assets/3e0cba7f-cad4-4d48-8cf5-9ddf57ff7f37
+
+
 ## Install
 
 ### Using Go
