@@ -21,34 +21,34 @@ jobs:
         goarch: [amd64, arm64]
         exclude: []
     steps:
-    - uses: actions/checkout@v2
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
 
-    - name: Set up Go
-      uses: actions/setup-go@v5
-      with:
-        go-version: '1.23'
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
 
-    - name: Run Tests
-      run: go test -v ./...
+      - name: Run Tests
+        run: go test -v ./...
 
-    - name: Generate release tag
-      id: generate_release_tag
-      uses: amitsingh-007/next-release-tag@v6.1.0
-      with:
-        github_token: ${{ secrets.PAT }}
-        tag_prefix: 'v1.0.'
-        tag_template: 'i'
+      - name: Git Semantic Version
+        id: semantic_version
+        uses: PaulHatch/semantic-version@v5.4.0
+        with:
+          tag_prefix: "v"
 
-    - uses: wangyoucao577/go-release-action@v1.53
-      with:
-        github_token: ${{ secrets.PAT }}
-        goos: ${{ matrix.goos }}
-        goarch: ${{ matrix.goarch }}
-        goversion: 1.23
-        ldflags: "-s -w -extldflags -static"
-        release_tag: "${{ steps.generate_release_tag.outputs.next_release_tag }}"
-        release_name: "${{ steps.generate_release_tag.outputs.next_release_tag }}"
-        pre_command: export CGO_ENABLED=0
-        binary_name: "ezdrop"
-        asset_name: "ezdrop-${{ matrix.goos }}-${{ matrix.goarch }}"
+      - uses: wangyoucao577/go-release-action@v1.53
+        with:
+          github_token: ${{ secrets.PAT }}
+          goos: ${{ matrix.goos }}
+          goarch: ${{ matrix.goarch }}
+          goversion: 1.23
+          ldflags: "-s -w -extldflags -static"
+          release_tag: "${{ steps.semantic_version.outputs.version }}"
+          release_name: "${{ steps.semantic_version.outputs.version }}"
+          pre_command: export CGO_ENABLED=0
+          binary_name: "ezdrop"
+          asset_name: "ezdrop-${{ matrix.goos }}-${{ matrix.goarch }}"
 
