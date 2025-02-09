@@ -30,7 +30,7 @@ jobs:
         tag_prefix: 'v'
         tag_template: 'yyyy-mm-dd-i'
 
-    - uses: wangyoucao577/go-release-action@latest
+    - uses: wangyoucao577/go-release-action@v1.53
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         goos: ${{ matrix.goos }}
