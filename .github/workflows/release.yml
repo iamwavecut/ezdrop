@@ -40,9 +40,11 @@ jobs:
         tag_template: 'yyyy-mm-dd-i'
 
     - name: Create Release Tag
-      uses: rickstaa/action-create-tag@v1
+      id: create_release_tag
+      if: ${{ steps.generate_release_tag.outputs.next_release_tag != '' }}
+      uses: rickstaa/action-create-tag@v1.7.2
       with:
-        tag: ${{ steps.generate_release_tag.outputs.tag }}
+        tag: "${{ steps.generate_release_tag.outputs.next_release_tag }}"
         message: "Release ${{ steps.generate_release_tag.outputs.next_release_tag }}"
         github_token: ${{ secrets.PAT }}
 
@@ -53,8 +55,8 @@ jobs:
         goarch: ${{ matrix.goarch }}
         goversion: 1.23
         ldflags: "-s -w -extldflags -static"
-        release_tag: ${{ steps.generate_release_tag.outputs.next_release_tag }}
-        release_name: ${{ steps.generate_release_tag.outputs.next_release_tag }}
+        release_tag: "${{ steps.generate_release_tag.outputs.next_release_tag }}"
+        release_name: "${{ steps.generate_release_tag.outputs.next_release_tag }}"
         pre_command: export CGO_ENABLED=0
         binary_name: "ezdrop"
         asset_name: "ezdrop-${{ matrix.goos }}-${{ matrix.goarch }}"
