@@ -4,9 +4,44 @@ Simple and fast web-based file browser and transfer tool.
 
 ## Install
 
+### Using Go
+
 ```bash
 go install github.com/iamwavecut/ezdrop@latest
 ```
+
+### Pre-built Binaries
+
+Download the latest release for your platform:
+- **Linux**
+  - amd64:
+    ```bash
+    curl -L https://github.com/iamwavecut/ezdrop/releases/latest/download/ezdrop-linux-amd64.tar.gz | tar xz && sudo mv ezdrop /usr/local/bin/
+    ```
+  - arm64:
+    ```bash
+    curl -L https://github.com/iamwavecut/ezdrop/releases/latest/download/ezdrop-linux-arm64.tar.gz | tar xz && sudo mv ezdrop /usr/local/bin/
+    ```
+
+- **Windows** (Run in PowerShell as Administrator)
+  - amd64:
+    ```powershell
+    Invoke-WebRequest -Uri https://github.com/iamwavecut/ezdrop/releases/latest/download/ezdrop-windows-amd64.zip -OutFile ezdrop.zip; Expand-Archive ezdrop.zip -DestinationPath $env:USERPROFILE\ezdrop; Move-Item $env:USERPROFILE\ezdrop\ezdrop.exe $env:USERPROFILE\AppData\Local\Microsoft\WindowsApps\
+    ```
+  - arm64:
+    ```powershell
+    Invoke-WebRequest -Uri https://github.com/iamwavecut/ezdrop/releases/latest/download/ezdrop-windows-arm64.zip -OutFile ezdrop.zip; Expand-Archive ezdrop.zip -DestinationPath $env:USERPROFILE\ezdrop; Move-Item $env:USERPROFILE\ezdrop\ezdrop.exe $env:USERPROFILE\AppData\Local\Microsoft\WindowsApps\
+    ```
+
+- **macOS**
+  - amd64:
+    ```bash
+    curl -L https://github.com/iamwavecut/ezdrop/releases/latest/download/ezdrop-darwin-amd64.tar.gz | tar xz && sudo mv ezdrop /usr/local/bin/
+    ```
+  - arm64:
+    ```bash
+    curl -L https://github.com/iamwavecut/ezdrop/releases/latest/download/ezdrop-darwin-arm64.tar.gz | tar xz && sudo mv ezdrop /usr/local/bin/
+    ```
 
 ## Usage
 
