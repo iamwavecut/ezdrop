@@ -35,6 +35,7 @@ jobs:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         goos: ${{ matrix.goos }}
         goarch: ${{ matrix.goarch }}
+        goversion: 1.23
         build_flags: -v
         ldflags: "-w -s"
         release_tag: ${{ steps.generate_release_tag.outputs.tag }}
