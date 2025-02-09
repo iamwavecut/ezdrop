@@ -11,15 +11,10 @@ on:
 
 
 jobs:
-  releases-matrix:
-    permissions: write-all
-    name: Release Matrix
+  create-release-tag:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        goos: [linux, windows, darwin]
-        goarch: [amd64, arm64]
-        exclude: []
+    outputs:
+      version_tag: ${{ steps.semantic_version.outputs.version_tag }}
     steps:
       - uses: actions/checkout@v2
         with:
@@ -29,9 +24,6 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.23'
-
-      - name: Run Tests
-        run: go test -v ./...
 
       - name: Git Semantic Version
         id: semantic_version
@@ -45,6 +37,22 @@ jobs:
           tag: "${{ steps.semantic_version.outputs.version_tag }}"
           message: "Release ${{ steps.semantic_version.outputs.version_tag }}"
           github_token: ${{ secrets.PAT }}
+          
+  
+  releases-matrix:
+    needs: create-release-tag
+    permissions: write-all
+    name: Release Matrix
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux, windows, darwin]
+        goarch: [amd64, arm64]
+        exclude: []
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
 
       - uses: wangyoucao577/go-release-action@v1.53
         with:
@@ -53,9 +61,8 @@ jobs:
           goarch: ${{ matrix.goarch }}
           goversion: 1.23
           ldflags: "-s -w -extldflags -static"
-          release_tag: "${{ steps.semantic_version.outputs.version_tag }}"
-          release_name: "${{ steps.semantic_version.outputs.version_tag }}"
+          release_tag: "${{ needs.create-release-tag.outputs.version_tag }}"
+          release_name: "${{ needs.create-release-tag.outputs.version_tag }}"
           pre_command: export CGO_ENABLED=0
           binary_name: "ezdrop"
           asset_name: "ezdrop-${{ matrix.goos }}-${{ matrix.goarch }}"
-
