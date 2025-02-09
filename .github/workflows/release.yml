@@ -65,5 +65,5 @@ jobs:
           release_name: "${{ needs.create-release-tag.outputs.version_tag }}"
           pre_command: export CGO_ENABLED=0
           binary_name: "ezdrop"
-          asset_name: "ezdrop-${BINARY_NAME}-${RELEASE_TAG}-${GOOS}-${GOARCH}"
+          asset_name: "ezdrop-${{ needs.create-release-tag.outputs.version_tag }}-${{ matrix.goos }}-${{ matrix.goarch }}"
           md5sum: false
