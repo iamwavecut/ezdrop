@@ -23,6 +23,14 @@ jobs:
     steps:
     - uses: actions/checkout@v2
 
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.23'
+
+    - name: Run Tests
+      run: go test -v ./...
+
     - name: Generate release tag
       id: generate_release_tag
       uses: amitsingh-007/next-release-tag@v6.0.0
@@ -31,14 +39,22 @@ jobs:
         tag_prefix: 'v'
         tag_template: 'yyyy-mm-dd-i'
 
+    - name: Create Release Tag
+      uses: rickstaa/action-create-tag@v1
+      with:
+        tag: ${{ steps.generate_release_tag.outputs.tag }}
+        message: "Release ${{ steps.generate_release_tag.outputs.tag }}"
+        github_token: ${{ secrets.PAT }}
+
     - uses: wangyoucao577/go-release-action@v1.53
       with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
+        github_token: ${{ secrets.PAT }}
         goos: ${{ matrix.goos }}
         goarch: ${{ matrix.goarch }}
         goversion: 1.23
         ldflags: "-s -w -extldflags -static"
         release_tag: ${{ steps.generate_release_tag.outputs.tag }}
+        release_name: ${{ steps.generate_release_tag.outputs.tag }}
         pre_command: export CGO_ENABLED=0
         binary_name: "ezdrop"
         asset_name: "ezdrop-${{ matrix.goos }}-${{ matrix.goarch }}"
