@@ -31,13 +31,13 @@ jobs:
         with:
           tag_prefix: "v"
 
-      - name: Create Release Tag
-        uses: rickstaa/action-create-tag@v1.7.2
+      - name: Create Tag Release
+        uses: beyond5959/create-release-github@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.PAT }}
         with:
-          tag: "${{ steps.semantic_version.outputs.version_tag }}"
-          message: "Release ${{ steps.semantic_version.outputs.version_tag }}"
-          github_token: ${{ secrets.PAT }}
-          
+          tag_name: ${{ steps.semantic_version.outputs.version_tag }}
+          release_name: ${{ steps.semantic_version.outputs.version_tag }}          
   
   releases-matrix:
     needs: create-release-tag
