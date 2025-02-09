@@ -46,8 +46,8 @@ jobs:
           goarch: ${{ matrix.goarch }}
           goversion: 1.23
           ldflags: "-s -w -extldflags -static"
-          release_tag: "${{ steps.semantic_version.outputs.version }}"
-          release_name: "${{ steps.semantic_version.outputs.version }}"
+          release_tag: "${{ steps.semantic_version.outputs.version_tag }}"
+          release_name: "${{ steps.semantic_version.outputs.version_tag }}"
           pre_command: export CGO_ENABLED=0
           binary_name: "ezdrop"
           asset_name: "ezdrop-${{ matrix.goos }}-${{ matrix.goarch }}"
