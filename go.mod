@@ -11,7 +11,7 @@ require (
 require (
 	github.com/Noooste/utls v1.3.1 // indirect
 	github.com/andybalholm/brotli v1.1.1 // indirect
-	github.com/cloudflare/circl v1.6.1 // indirect
+	github.com/cloudflare/circl v1.6.3 // indirect
 	github.com/klauspost/compress v1.17.11 // indirect
 	golang.org/x/crypto v0.54.0 // indirect
 	golang.org/x/net v0.56.0 // indirect
