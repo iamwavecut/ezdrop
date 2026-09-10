@@ -23,7 +23,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.23'
+          go-version-file: go.mod
 
       - name: Git Semantic Version
         id: semantic_version
@@ -59,7 +59,7 @@ jobs:
           github_token: ${{ secrets.PAT }}
           goos: ${{ matrix.goos }}
           goarch: ${{ matrix.goarch }}
-          goversion: 1.23
+          goversion: 1.26
           ldflags: "-s -w -extldflags -static"
           release_tag: "${{ needs.create-release-tag.outputs.version_tag }}"
           release_name: "${{ needs.create-release-tag.outputs.version_tag }}"
